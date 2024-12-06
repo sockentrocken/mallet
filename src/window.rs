@@ -1,4 +1,6 @@
 use crate::editor::*;
+use crate::game::*;
+use crate::widget::*;
 
 //================================================================
 
@@ -7,8 +9,10 @@ use raylib::prelude::*;
 //================================================================
 
 pub struct Window {
+    game: Vec<Game>,
     data: [widget::Data; 64],
     font: Font,
+    logo: Texture2D,
     point: Vector2,
     focus: Option<i32>,
     count: i32,
@@ -16,6 +20,7 @@ pub struct Window {
 
 impl Window {
     pub const FONT: &'static [u8] = include_bytes!("asset/font.ttf");
+    pub const LOGO: &'static [u8] = include_bytes!("asset/logo.png");
 
     pub const COLOR_PRIMARY_MAIN: Color = Color::new(3, 169, 244, 255);
     pub const COLOR_PRIMARY_SIDE: Color = Color::new(25, 118, 210, 255);
@@ -75,12 +80,81 @@ impl Window {
 
     //================================================================
 
+    pub fn new(handle: &mut RaylibHandle, thread: &RaylibThread) -> Self {
+        let font = handle
+            .load_font_from_memory(thread, ".ttf", Self::FONT, Self::TEXT_SHAPE as i32, None)
+            .expect("Window::new(): Could not load default font.");
+        let logo = handle
+            .load_texture_from_image(
+                thread,
+                &Image::load_image_from_mem(".png", Self::LOGO)
+                    .expect("Window::new(): Could not load texture."),
+            )
+            .expect("Window::new(): Could not load texture.");
+
+        Self {
+            game: Game::new_vector(),
+            data: [widget::Data::default(); Self::WIDGET_COUNT],
+            font,
+            logo,
+            point: Vector2::default(),
+            focus: None,
+            count: i32::default(),
+        }
+    }
+
+    pub fn widget(
+        &mut self,
+        draw: &mut RaylibDrawHandle,
+        point: Vector2,
+        asset: &Texture2D,
+        board: KeyboardKey,
+        key: &str,
+    ) -> bool {
+        self.point(point);
+        let result =
+            self.button_shape(draw, Some("A"), Some(Vector2::new(36.0, 36.0)), Some(asset))
+                || draw.is_key_pressed(board);
+
+        let point = Vector2::new(point.x + 24.0, point.y + 24.0);
+
+        self.card_round(
+            draw,
+            Rectangle::new(point.x, point.y, 24.0, 24.0),
+            Color::BLACK,
+        );
+
+        self.font(
+            draw,
+            key,
+            Vector2::new(point.x + 4.0, point.y + 2.0),
+            Color::GRAY,
+        );
+
+        result
+    }
+
+    #[rustfmt::skip]
+    pub fn draw_widget(&mut self, draw: &mut RaylibDrawHandle, editor: &mut Editor) {
+        let mut x = 0.0;
+        let point = 16.0;
+        let shift = 48.0;
+
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), &editor.asset.inner.position, KeyboardKey::KEY_Q, "Q") { editor.widget = Widget::Position; }; x += 1.0;
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), &editor.asset.inner.rotation, KeyboardKey::KEY_W, "W") { editor.widget = Widget::Rotation; }; x += 1.0;
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), &editor.asset.inner.scale,    KeyboardKey::KEY_E, "E") { editor.widget = Widget::Scale;    }; x += 1.0;
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), &editor.asset.inner.vertex,   KeyboardKey::KEY_Z, "Z") { editor.widget = Widget::Vertex;   }; x += 1.0;
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), &editor.asset.inner.edge,     KeyboardKey::KEY_X, "X") { editor.widget = Widget::Edge;     }; x += 1.0;
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), &editor.asset.inner.face,     KeyboardKey::KEY_C, "C") { editor.widget = Widget::Face;     };
+    }
+
+    #[rustfmt::skip]
     pub fn update(
         &mut self,
         draw: &mut RaylibDrawHandle,
         thread: &RaylibThread,
         editor: &mut Editor,
-    ) {
+    ) -> bool {
         self.begin();
 
         let draw_shape = Vector2::new(
@@ -107,73 +181,21 @@ impl Window {
             true,
         );
 
-        let mut x = 0.0;
-        let point = 16.0;
-        let shift = 48.0;
-
-        self.point(Vector2::new(point + (shift * x), 16.0));
-        if self.button_shape(
-            draw,
-            Some("A"),
-            Some(Vector2::new(36.0, 36.0)),
-            Some(&editor.asset.icon_position),
-        ) {
-            editor.widget = Widget::Position;
-        }
-        x += 1.0;
-
-        self.point(Vector2::new(point + (shift * x), 16.0));
-        if self.button_shape(
-            draw,
-            Some("B"),
-            Some(Vector2::new(36.0, 36.0)),
-            Some(&editor.asset.icon_rotation),
-        ) {
-            editor.widget = Widget::Rotation;
-        }
-        x += 1.0;
-
-        self.point(Vector2::new(point + (shift * x), 16.0));
-        if self.button_shape(
-            draw,
-            Some("C"),
-            Some(Vector2::new(36.0, 36.0)),
-            Some(&editor.asset.icon_scale),
-        ) {
-            editor.widget = Widget::Scale;
-        }
-        x += 1.0;
+        self.draw_widget(draw, editor);
 
         let mut x = 0.0;
         let point = draw_shape.x - Self::EDIT_SHAPE + 12.0;
         let shift = 40.0;
 
-        self.point(Vector2::new(point + (shift * x), 80.0));
-        self.button_shape(draw, Some("A"), Some(Vector2::new(36.0, 36.0)), None);
-        x += 1.0;
+        self.point(Vector2::new(point, 80.0));
+        if self.button(draw, "Exit") {
+            return true;
+        }
 
-        self.point(Vector2::new(point + (shift * x), 80.0));
-        self.button_shape(draw, Some("A"), Some(Vector2::new(36.0, 36.0)), None);
-        x += 1.0;
-
-        self.point(Vector2::new(point + (shift * x), 80.0));
-        self.button_shape(draw, Some("A"), Some(Vector2::new(36.0, 36.0)), None);
-        x += 1.0;
-
-        self.scroll(
-            draw,
-            Rectangle::new(
-                point,
-                128.0,
-                Self::EDIT_SHAPE - 24.0,
-                draw_shape.y - Self::TOOL_SHAPE - 72.0,
-            ),
-            |window, draw| {
-                for x in 0..32 {
-                    window.button(draw, "foo");
-                }
-            },
-        );
+        self.point(Vector2::new(point, 120.0));
+        for entity in &editor.script.meta.entity {
+            self.button(draw, &entity.name);
+        }
 
         /*
         let card_shape = Rectangle::new(0.0, 0.0, draw_shape.x, draw_shape.y - Self::LOGO_SHAPE);
@@ -186,20 +208,8 @@ impl Window {
         if self.button(draw, "Load Map") {}
         if self.button(draw, "Exit Brushy") {}
         */
-    }
 
-    pub fn new(handle: &mut RaylibHandle, thread: &RaylibThread) -> Self {
-        let font = handle
-            .load_font_from_memory(thread, ".ttf", Self::FONT, Self::TEXT_SHAPE as i32, None)
-            .expect("Window::new(): Could not load default font.");
-
-        Self {
-            data: [widget::Data::default(); Self::WIDGET_COUNT],
-            font,
-            point: Vector2::default(),
-            focus: None,
-            count: i32::default(),
-        }
+        false
     }
 
     pub fn begin(&mut self) {
