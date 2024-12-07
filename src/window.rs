@@ -1,5 +1,9 @@
 use crate::editor::*;
+use crate::entity::*;
 use crate::game::*;
+use crate::script::*;
+use crate::status::*;
+use crate::user::*;
 use crate::widget::*;
 
 //================================================================
@@ -20,7 +24,7 @@ pub struct Window {
 
 impl Window {
     pub const FONT: &'static [u8] = include_bytes!("asset/font.ttf");
-    pub const LOGO: &'static [u8] = include_bytes!("asset/logo.png");
+    pub const LOGO: &'static [u8] = include_bytes!("asset/configuration.png");
 
     pub const COLOR_PRIMARY_MAIN: Color = Color::new(3, 169, 244, 255);
     pub const COLOR_PRIMARY_SIDE: Color = Color::new(25, 118, 210, 255);
@@ -93,7 +97,7 @@ impl Window {
             .expect("Window::new(): Could not load texture.");
 
         Self {
-            game: Game::new_vector(),
+            game: Game::new_list(),
             data: [widget::Data::default(); Self::WIDGET_COUNT],
             font,
             logo,
@@ -107,52 +111,149 @@ impl Window {
         &mut self,
         draw: &mut RaylibDrawHandle,
         point: Vector2,
+        name: &str,
         asset: &Texture2D,
-        board: KeyboardKey,
-        key: &str,
+        input: &Input,
     ) -> bool {
         self.point(point);
-        let result =
-            self.button_shape(draw, Some("A"), Some(Vector2::new(36.0, 36.0)), Some(asset))
-                || draw.is_key_pressed(board);
+        let button =
+            self.button_shape(draw, Some("A"), Some(Vector2::new(36.0, 36.0)), Some(asset));
 
-        let point = Vector2::new(point.x + 24.0, point.y + 24.0);
+        if button.0.hover {
+            println!("{}", button.1.hover);
 
-        self.card_round(
-            draw,
-            Rectangle::new(point.x, point.y, 24.0, 24.0),
-            Color::BLACK,
-        );
+            let text: String = input.clone().into();
+            let text = format!("{name}\n{text}");
 
-        self.font(
-            draw,
-            key,
-            Vector2::new(point.x + 4.0, point.y + 2.0),
-            Color::GRAY,
-        );
+            let measure = self.font_measure(&text);
 
-        result
+            let shift = draw.get_screen_width() as f32 - (point.x + measure.x + 16.0);
+            let shift = shift.min(0.0);
+
+            let point = Vector2::new(point.x + shift, point.y + 36.0 + button.1.get_point());
+
+            self.card_round(
+                draw,
+                Rectangle::new(point.x, point.y, measure.x + 8.0, measure.y + 4.0),
+                Color::new(0, 0, 0, (255.0 * button.1.hover) as u8),
+            );
+
+            self.font(
+                draw,
+                &text,
+                Vector2::new(point.x + 4.0, point.y + 2.0),
+                Color::new(255, 255, 255, (255.0 * button.1.hover) as u8),
+            );
+        }
+
+        button.0.click || input.get_press(draw)
     }
 
     #[rustfmt::skip]
-    pub fn draw_widget(&mut self, draw: &mut RaylibDrawHandle, editor: &mut Editor) {
+    pub fn draw_widget(&mut self, draw: &mut RaylibDrawHandle, thread: &RaylibThread, editor: &mut Editor) -> bool {
         let mut x = 0.0;
         let point = 16.0;
         let shift = 48.0;
 
-        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), &editor.asset.inner.position, KeyboardKey::KEY_Q, "Q") { editor.widget = Widget::Position; }; x += 1.0;
-        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), &editor.asset.inner.rotation, KeyboardKey::KEY_W, "W") { editor.widget = Widget::Rotation; }; x += 1.0;
-        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), &editor.asset.inner.scale,    KeyboardKey::KEY_E, "E") { editor.widget = Widget::Scale;    }; x += 1.0;
-        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), &editor.asset.inner.vertex,   KeyboardKey::KEY_Z, "Z") { editor.widget = Widget::Vertex;   }; x += 1.0;
-        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), &editor.asset.inner.edge,     KeyboardKey::KEY_X, "X") { editor.widget = Widget::Edge;     }; x += 1.0;
-        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), &editor.asset.inner.face,     KeyboardKey::KEY_C, "C") { editor.widget = Widget::Face;     };
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), "Position", &editor.asset.inner.position, &editor.user.position) { editor.widget = Widget::Position; }; x += 1.0;
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), "Rotation", &editor.asset.inner.rotation, &editor.user.rotation) { editor.widget = Widget::Rotation; }; x += 1.0;
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), "Scale", &editor.asset.inner.scale,    &editor.user.scale)    { editor.widget = Widget::Scale;    }; x += 1.0;
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), "Vertex", &editor.asset.inner.vertex,   &editor.user.vertex)   { editor.widget = Widget::Vertex;   }; x += 1.0;
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), "Edge", &editor.asset.inner.edge,     &editor.user.edge)     { editor.widget = Widget::Edge;     }; x += 1.0;
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), "Face", &editor.asset.inner.face,     &editor.user.face)     { editor.widget = Widget::Face;     };
+
+        let mut x = 0.0;
+        let point = draw.get_screen_width() as f32 - 244.0;
+        let shift = 48.0;
+
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), "Configuration", &editor.asset.inner.configuration, &editor.user.configuration) { println!("1"); }; x += 1.0;
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), "Reload", &editor.asset.inner.reload,        &editor.user.reload)        { println!("2"); }; x += 1.0;
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), "Import", &editor.asset.inner.import,        &editor.user.import)        { println!("3"); }; x += 1.0;
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), "Export", &editor.asset.inner.export,        &editor.user.export)        { println!("4"); }; x += 1.0;
+        if self.widget(draw, Vector2::new(point + (shift * x), 16.0), "Exit", &editor.asset.inner.exit,          &editor.user.exit)          { println!("5"); };
+
+        false
     }
 
-    #[rustfmt::skip]
-    pub fn update(
+    pub fn initial(
+        &mut self,
+        handle: &mut RaylibHandle,
+        thread: &RaylibThread,
+        status: &mut InitialState,
+        game: &[Game],
+    ) -> Option<Status> {
+        if handle.window_should_close() {
+            return Some(Status::Closure);
+        }
+
+        let mut draw = handle.begin_drawing(thread);
+        draw.clear_background(Color::WHITE);
+
+        self.begin();
+
+        let draw_shape = Vector2::new(
+            draw.get_screen_width() as f32,
+            draw.get_screen_height() as f32,
+        );
+
+        match status {
+            InitialState::Main => {
+                let card_shape =
+                    Rectangle::new(0.0, 0.0, draw_shape.x, draw_shape.y - Self::LOGO_SHAPE);
+
+                self.card_sharp(&mut draw, card_shape, Window::COLOR_PRIMARY_MAIN, true);
+
+                self.point(Vector2::new(20.0, draw_shape.y - Self::LOGO_SHAPE + 24.0));
+
+                if self.button(&mut draw, "New Map").0.click {
+                    *status = InitialState::New;
+                }
+                if self.button(&mut draw, "Load Map").0.click {}
+                if self.button(&mut draw, "Exit Brushy").0.click {
+                    return Some(Status::Closure);
+                }
+            }
+            InitialState::New => {
+                let card_shape = Rectangle::new(0.0, 0.0, draw_shape.x, 48.0);
+
+                self.card_sharp(&mut draw, card_shape, Window::COLOR_PRIMARY_MAIN, true);
+
+                self.font(
+                    &mut draw,
+                    "Game Selection",
+                    Vector2::new(16.0, 12.0),
+                    Window::COLOR_TEXT,
+                );
+
+                self.point(Vector2::new(20.0, 72.0));
+
+                for g in game {
+                    if self.button(&mut draw, &g.info.name).0.click {
+                        drop(draw);
+                        return Some(Status::Success(
+                            SuccessState::Main,
+                            Window::new(handle, thread),
+                            Editor::new(handle, thread, g.clone()),
+                        ));
+                    }
+                }
+
+                self.point(Vector2::new(20.0, draw_shape.y - 56.0));
+
+                if self.button(&mut draw, "Back").0.click {
+                    *status = InitialState::Main;
+                }
+            }
+        }
+
+        None
+    }
+
+    pub fn success(
         &mut self,
         draw: &mut RaylibDrawHandle,
         thread: &RaylibThread,
+        status: &mut SuccessState,
         editor: &mut Editor,
     ) -> bool {
         self.begin();
@@ -162,52 +263,49 @@ impl Window {
             draw.get_screen_height() as f32,
         );
 
-        self.card_sharp(
-            draw,
-            Rectangle::new(
-                draw_shape.x - Self::EDIT_SHAPE,
-                0.0,
-                Self::EDIT_SHAPE,
-                draw_shape.y,
-            ),
-            Window::COLOR_PRIMARY_MAIN,
-            false,
-        );
+        match status {
+            SuccessState::Main => {
+                self.card_sharp(
+                    draw,
+                    Rectangle::new(
+                        draw_shape.x - Self::EDIT_SHAPE,
+                        0.0,
+                        Self::EDIT_SHAPE,
+                        draw_shape.y,
+                    ),
+                    Window::COLOR_PRIMARY_MAIN,
+                    false,
+                );
 
-        self.card_sharp(
-            draw,
-            Rectangle::new(0.0, 0.0, draw_shape.x, Self::TOOL_SHAPE),
-            Window::COLOR_PRIMARY_MAIN,
-            true,
-        );
+                self.card_sharp(
+                    draw,
+                    Rectangle::new(0.0, 0.0, draw_shape.x, Self::TOOL_SHAPE),
+                    Window::COLOR_PRIMARY_MAIN,
+                    true,
+                );
 
-        self.draw_widget(draw, editor);
+                let mut x = 0.0;
+                let point = draw_shape.x - Self::EDIT_SHAPE + 12.0;
+                let shift = 40.0;
 
-        let mut x = 0.0;
-        let point = draw_shape.x - Self::EDIT_SHAPE + 12.0;
-        let shift = 40.0;
+                self.point(Vector2::new(point, 80.0));
 
-        self.point(Vector2::new(point, 80.0));
-        if self.button(draw, "Exit") {
-            return true;
+                for entity in &editor.script.meta.entity {
+                    if self.button(draw, &entity.meta.name).0.click {
+                        editor.entity.push(Entity::new_from_lua(entity.clone()));
+                    }
+                }
+
+                for (name, texture) in &editor.asset.outer.texture {
+                    self.button_shape(draw, None, Some(Vector2::new(64.0, 64.0)), Some(texture));
+                }
+
+                let result = self.draw_widget(draw, thread, editor);
+
+                return result;
+            }
+            SuccessState::User => {}
         }
-
-        self.point(Vector2::new(point, 120.0));
-        for entity in &editor.script.meta.entity {
-            self.button(draw, &entity.name);
-        }
-
-        /*
-        let card_shape = Rectangle::new(0.0, 0.0, draw_shape.x, draw_shape.y - Self::LOGO_SHAPE);
-
-        self.card_sharp(draw, card_shape, Window::COLOR_PRIMARY_MAIN);
-
-        self.point(Vector2::new(20.0, draw_shape.y - Self::LOGO_SHAPE + 24.0));
-
-        if self.button(draw, "New Map") {}
-        if self.button(draw, "Load Map") {}
-        if self.button(draw, "Exit Brushy") {}
-        */
 
         false
     }
@@ -306,11 +404,19 @@ impl Window {
         self.point.y += self.font_measure(text).y + Self::TEXT_SHIFT;
     }
 
-    pub fn button(&mut self, draw: &mut RaylibDrawHandle, text: &str) -> bool {
+    pub fn button(
+        &mut self,
+        draw: &mut RaylibDrawHandle,
+        text: &str,
+    ) -> (widget::State, widget::Data) {
         self.button_shape(draw, Some(text), None, None)
     }
 
-    pub fn button_image(&mut self, draw: &mut RaylibDrawHandle, texture: &Texture2D) -> bool {
+    pub fn button_image(
+        &mut self,
+        draw: &mut RaylibDrawHandle,
+        texture: &Texture2D,
+    ) -> (widget::State, widget::Data) {
         self.button_shape(draw, None, None, Some(texture))
     }
 
@@ -320,7 +426,7 @@ impl Window {
         text: Option<&str>,
         shape: Option<Vector2>,
         image: Option<&Texture2D>,
-    ) -> bool {
+    ) -> (widget::State, widget::Data) {
         let shape = shape.unwrap_or(Self::BUTTON_SHAPE);
 
         let rectangle = Rectangle::new(self.point.x, self.point.y, shape.x, shape.y);
@@ -360,10 +466,12 @@ impl Window {
             self.font(draw, text, text_point, data.get_color(&Self::COLOR_TEXT));
         }
 
+        let result = (state, *data);
+
         self.point.y += shape.y + Self::BUTTON_SHIFT;
         self.count += 1;
 
-        state.click
+        result
     }
 
     pub fn toggle(&mut self, draw: &mut RaylibDrawHandle, text: &str, value: &mut bool) {

@@ -1,5 +1,6 @@
 use crate::asset::*;
 use crate::brush::*;
+use crate::entity::*;
 use crate::game::*;
 use crate::script::*;
 use crate::user::*;
@@ -15,6 +16,7 @@ use raylib::prelude::*;
 
 pub struct Editor {
     pub brush: Vec<Brush>,
+    pub entity: Vec<Entity>,
     pub widget: Widget,
     pub asset: Asset,
     pub view: [View; 4],
@@ -26,10 +28,17 @@ pub struct Editor {
 impl Editor {
     #[rustfmt::skip]
     pub fn new(handle: &mut RaylibHandle, thread: &RaylibThread, game: Game) -> Self {
+        let mut asset = Asset::new(handle, thread);
+        let mut script = Script::new(&game);
+
+        asset.outer.set_texture_list(handle, thread, &script.meta.texture);
+
         Self {
-            brush: vec![Brush::default()],
+            //brush: vec![Brush::default()],
+            brush: Vec::default(),
+            entity: Vec::default(),
             widget: Widget::default(),
-            asset: Asset::new(handle, thread),
+            asset,
             view: [
                 View::new(handle, thread, Camera3D::perspective(Vector3::new(4.0, 4.0, 4.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 90.0)),
                 View::new(handle, thread, Camera3D::perspective(Vector3::new(4.0, 4.0, 4.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 90.0)),
@@ -40,9 +49,18 @@ impl Editor {
                 //View::new(handle, thread, Camera3D::orthographic(Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 0.0), 30.0)),
             ],
             user: User::new_from_file(&game.path),
-            script: Script::new(&game),
+            script,
             game,
         }
+    }
+
+    pub fn reload(&mut self, handle: &mut RaylibHandle, thread: &RaylibThread) {
+        self.entity.clear();
+        self.asset.outer.texture.clear();
+        self.script = Script::new(&self.game);
+        self.asset
+            .outer
+            .set_texture_list(handle, thread, &self.script.meta.texture);
     }
 
     #[rustfmt::skip]
@@ -70,6 +88,10 @@ impl Editor {
 
                 for brush in &self.brush {
                     brush.draw(&self.asset.inner.default);
+                }
+
+                for entity in &self.entity {
+                    entity.draw(&mut draw);
                 }
             }
 
