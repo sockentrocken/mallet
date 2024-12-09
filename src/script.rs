@@ -1,5 +1,4 @@
 use crate::editor::*;
-use crate::entity::*;
 use crate::game::*;
 
 //================================================================
@@ -21,11 +20,11 @@ impl Script {
         let lua = Lua::new_with(LuaStdLib::ALL_SAFE, LuaOptions::new()).unwrap();
 
         let global = lua.globals();
-        let brushy = lua.create_table().unwrap();
+        let mallet = lua.create_table().unwrap();
 
-        Self::system(&lua, &brushy);
+        Self::system(&lua, &mallet);
 
-        global.set("brushy", brushy).unwrap();
+        global.set("mallet", mallet).unwrap();
 
         lua.set_app_data(Meta::default());
 

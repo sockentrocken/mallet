@@ -44,7 +44,7 @@ impl Status {
             .msaa_4x()
             .vsync()
             .size(1024, 768)
-            .title("Brushy")
+            .title("Mallet")
             .build()
     }
 
@@ -55,7 +55,10 @@ impl Status {
         window: &mut Window,
         game: &[Game],
     ) -> Option<Status> {
-        window.initial(handle, thread, status, game)
+        let mut draw = handle.begin_drawing(thread);
+        draw.clear_background(Color::WHITE);
+
+        window.initial(&mut draw, thread, status, game)
     }
 
     pub fn success(
@@ -69,13 +72,11 @@ impl Status {
             editor.resize(handle, &thread);
 
             let mut draw = handle.begin_drawing(&thread);
-
             draw.clear_background(Color::WHITE);
 
             editor.update(&mut draw, &thread);
-            if window.success(&mut draw, &thread, status, editor) {
-                drop(draw);
-                return Some(Status::new(handle, thread));
+            if let Some(status) = window.success(&mut draw, &thread, status, editor) {
+                return Some(status);
             }
         }
 

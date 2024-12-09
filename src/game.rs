@@ -1,4 +1,7 @@
 use crate::helper::*;
+
+//================================================================
+
 use serde::{Deserialize, Serialize};
 
 //================================================================
@@ -63,6 +66,7 @@ impl Info {
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Data {
     pub path: String,
+    pub configuration: Vec<Configuration>,
 }
 
 impl Data {
@@ -82,4 +86,11 @@ impl Data {
             None
         }
     }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct Configuration {
+    pub name: String,
+    pub info: String,
+    pub kind: serde_json::Value,
 }

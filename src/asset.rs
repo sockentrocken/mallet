@@ -39,7 +39,7 @@ pub struct Inner {
 }
 
 impl Inner {
-    const DEFAULT: &'static [u8] = include_bytes!("asset/default.png");
+    const DEFAULT: &'static [u8] = include_bytes!("asset/stair.png");
     const POSITION: &'static [u8] = include_bytes!("asset/position.png");
     const ROTATION: &'static [u8] = include_bytes!("asset/rotation.png");
     const SCALE: &'static [u8] = include_bytes!("asset/scale.png");

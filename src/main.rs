@@ -1,14 +1,9 @@
 mod asset;
-mod brush;
 mod editor;
-mod entity;
 mod game;
 mod helper;
 mod script;
 mod status;
-mod user;
-mod view;
-mod widget;
 mod window;
 
 //================================================================
