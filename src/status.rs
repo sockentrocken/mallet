@@ -1,5 +1,6 @@
 use crate::editor::*;
 use crate::game::*;
+use crate::helper::*;
 use crate::window::*;
 
 //================================================================
@@ -30,6 +31,8 @@ pub enum Status {
 }
 
 impl Status {
+    pub const ICON: &'static [u8] = include_bytes!("asset/icon.png");
+
     pub fn new(handle: &mut RaylibHandle, thread: &RaylibThread) -> Self {
         Self::Initial(
             InitialState::default(),
@@ -39,13 +42,21 @@ impl Status {
     }
 
     pub fn window() -> (RaylibHandle, RaylibThread) {
-        raylib::init()
+        let (mut handle, thread) = raylib::init()
             .resizable()
             .msaa_4x()
             .vsync()
             .size(1024, 768)
             .title("Mallet")
-            .build()
+            .build();
+
+        let icon = Image::load_image_from_mem(".png", Self::ICON)
+            .map_err(|e| panic(&e.to_string()))
+            .unwrap();
+
+        handle.set_window_icon(icon);
+
+        (handle, thread)
     }
 
     pub fn initial(
@@ -69,8 +80,6 @@ impl Status {
         editor: &mut Editor,
     ) -> Option<Status> {
         while !handle.window_should_close() {
-            editor.resize(handle, &thread);
-
             let mut draw = handle.begin_drawing(&thread);
             draw.clear_background(Color::WHITE);
 

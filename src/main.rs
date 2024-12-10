@@ -1,12 +1,12 @@
-mod asset;
 mod editor;
 mod game;
 mod helper;
-mod script;
 mod status;
 mod window;
 
 //================================================================
+
+use raylib::prelude::*;
 
 use crate::status::*;
 
@@ -16,6 +16,7 @@ use crate::status::*;
 fn main() {
     let (mut handle, thread) = Status::window();
     let mut status = Status::new(&mut handle, &thread);
+
 
     loop {
         match status {

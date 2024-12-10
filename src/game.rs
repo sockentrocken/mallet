@@ -14,8 +14,6 @@ pub struct Game {
 }
 
 impl Game {
-    pub const RESOURCE_PATH: &'static str = "resource";
-
     pub fn new(info: Info, data: Option<Data>, path: String) -> Self {
         Self { info, data, path }
     }
@@ -23,15 +21,13 @@ impl Game {
     pub fn new_list() -> Vec<Self> {
         let mut result: Vec<Self> = Vec::new();
 
-        let path = std::fs::read_dir(Self::RESOURCE_PATH).unwrap();
+        let info_mallet = InfoMallet::new();
 
-        for file in path {
-            let path = file.unwrap().path().display().to_string();
-
+        for file in info_mallet.path {
             result.push(Game::new(
-                Info::new_from_file(&path),
-                Data::new_from_file(&path),
-                path,
+                Info::new_from_file(&file),
+                Data::new_from_file(&file),
+                file,
             ));
         }
 
@@ -57,6 +53,26 @@ impl Info {
             .unwrap();
         serde_json::from_str(&data)
             .map_err(|e| panic(&format!("Info::new_from_file(): {e}")))
+            .unwrap()
+    }
+}
+
+//================================================================
+
+#[derive(Clone, Deserialize)]
+pub struct InfoMallet {
+    pub path: Vec<String>,
+}
+
+impl InfoMallet {
+    pub const FILE_NAME: &'static str = "info_mallet.json";
+
+    pub fn new() -> Self {
+        let data = std::fs::read_to_string(Self::FILE_NAME)
+            .map_err(|e| panic(&format!("InfoMallet::new_from_file(): {e}")))
+            .unwrap();
+        serde_json::from_str(&data)
+            .map_err(|e| panic(&format!("InfoMallet::new_from_file(): {e}")))
             .unwrap()
     }
 }

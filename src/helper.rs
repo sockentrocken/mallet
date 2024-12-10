@@ -26,6 +26,40 @@ pub fn direction_from_euler(angle: Vector2) -> (Vector3, Vector3, Vector3) {
 
 //================================================================
 
+#[rustfmt::skip]
+pub fn draw_grid(slice: i32, space: f32, angle: Vector4) {
+    let half_slice = (slice as f32) / 2.0;
+
+    unsafe {
+        ffi::rlPushMatrix();
+        ffi::rlRotatef(angle.w, angle.x, angle.y, angle.z);
+
+        ffi::rlBegin(ffi::RL_LINES.try_into().unwrap());
+
+        for i in -half_slice as i32..half_slice as i32 {
+            if i == 0 {
+                ffi::rlColor3f(0.50, 0.50, 0.50);
+            } else {
+                ffi::rlColor3f(0.75, 0.75, 0.75);
+            }
+
+            let i = i as f32;
+
+            ffi::rlVertex3f(i * space, 0.0, -half_slice * space);
+            ffi::rlVertex3f(i * space, 0.0,  half_slice * space);
+
+            ffi::rlVertex3f(-half_slice * space, 0.0, i * space);
+            ffi::rlVertex3f( half_slice * space, 0.0, i * space);
+        }
+
+        ffi::rlEnd();
+
+        ffi::rlPopMatrix();
+    }
+}
+
+//================================================================
+
 pub fn snap(vector: &Vector3, grid: f32) -> Vector3 {
     Vector3::new(
         (vector.x / grid).round() * grid,

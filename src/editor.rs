@@ -1,14 +1,13 @@
-use crate::asset::*;
 use crate::game::*;
 use crate::helper::*;
-use crate::script::*;
 use crate::window::*;
 
 //================================================================
 
+use mlua::prelude::*;
 use raylib::{ffi::KeyboardKey::*, ffi::MouseButton::*, prelude::*};
 use serde::{de, de::Visitor, Deserialize, Serialize};
-use std::fmt;
+use std::{collections::HashMap, ffi::CString, fmt};
 
 //================================================================
 
@@ -23,6 +22,8 @@ pub struct Editor {
     pub script: Script,
 }
 
+pub fn select() {}
+
 impl Editor {
     #[rustfmt::skip]
     pub fn new(handle: &mut RaylibHandle, thread: &RaylibThread, game: Game) -> Self {
@@ -32,23 +33,349 @@ impl Editor {
         asset.outer.set_texture_list(handle, thread, &script.meta.texture);
 
         Self {
-            //brush: vec![Brush::default()],
-            brush: Vec::default(),
+            brush: vec![Brush::default()],
+            //brush: Vec::default(),
             entity: Vec::default(),
             widget: Widget::default(),
             asset,
             view: [
                 View::new(handle, thread, Camera3D::perspective(Vector3::new(4.0, 4.0, 4.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 90.0)),
-                View::new(handle, thread, Camera3D::perspective(Vector3::new(4.0, 4.0, 4.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 90.0)),
-                View::new(handle, thread, Camera3D::perspective(Vector3::new(4.0, 4.0, 4.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 90.0)),
-                View::new(handle, thread, Camera3D::perspective(Vector3::new(4.0, 4.0, 4.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 90.0)),
-                //View::new(handle, thread, Camera3D::orthographic(Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 0.0), 30.0)),
-                //View::new(handle, thread, Camera3D::orthographic(Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 0.0, 0.0), 30.0)),
-                //View::new(handle, thread, Camera3D::orthographic(Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 0.0), 30.0)),
+                View::new(handle, thread, Camera3D::orthographic(Vector3::new(256.0, 0.0, 0.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 15.0)),
+                View::new(handle, thread, Camera3D::orthographic(Vector3::new(0.0, 256.0, 0.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 0.0), 15.0)),
+                View::new(handle, thread, Camera3D::orthographic(Vector3::new(0.0, 0.0, 256.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 15.0)),
             ],
             user: User::new(),
             script,
             game,
+        }
+    }
+
+    pub fn select(
+        user: &User,
+        brush: &mut [Brush],
+        entity: &mut [Entity],
+        widget: &Widget,
+        draw: &mut RaylibDrawHandle,
+        render_view: Rectangle,
+        view: &Camera3D,
+    ) {
+        if user.interact.get_press(draw) {
+            // get ray from camera.
+            let ray = draw.get_screen_to_world_ray_ex(
+                draw.get_mouse_position() - Vector2::new(render_view.x, render_view.y),
+                view,
+                render_view.width as i32,
+                render_view.height as i32,
+            );
+
+            enum Picker {
+                Brush(usize),
+                Entity(usize),
+            }
+
+            let mut hit: Option<(Picker, f32)> = None;
+
+            // for each brush...
+            for (i, brush) in brush.iter().enumerate() {
+                for face in &brush.face {
+                    // generate quad.
+                    let point = [
+                        brush.vertex[face.index[0]],
+                        brush.vertex[face.index[1]],
+                        brush.vertex[face.index[2]],
+                        brush.vertex[face.index[3]],
+                    ];
+
+                    let point = [
+                        Vector3::new(point[0][0], point[0][1], point[0][2]),
+                        Vector3::new(point[1][0], point[1][1], point[1][2]),
+                        Vector3::new(point[2][0], point[2][1], point[2][2]),
+                        Vector3::new(point[3][0], point[3][1], point[3][2]),
+                    ];
+
+                    // check for collision.
+                    let ray = get_ray_collision_quad(ray, point[0], point[1], point[2], point[3]);
+
+                    // collision hit; check if the entity is closer than the hit entity, or if there is no hit entity, set it as such.
+                    if ray.hit {
+                        if let Some((_, distance)) = hit {
+                            if ray.distance < distance {
+                                hit = Some((Picker::Brush(i), ray.distance));
+                            }
+                        } else {
+                            hit = Some((Picker::Brush(i), ray.distance));
+                        }
+                    }
+                }
+            }
+
+            // for each entity...
+            for (i, entity) in entity.iter().enumerate() {
+                // generate a bound-box.
+                let shape = entity.lua.meta.shape;
+                let min = Vector3::new(
+                    entity.position[0] + shape[0][0],
+                    entity.position[1] + shape[0][1],
+                    entity.position[2] + shape[0][2],
+                );
+                let max = Vector3::new(
+                    entity.position[0] + shape[1][0],
+                    entity.position[1] + shape[1][1],
+                    entity.position[2] + shape[1][2],
+                );
+                let shape = BoundingBox::new(min, max);
+
+                // check for collision.
+                let ray = shape.get_ray_collision_box(ray);
+
+                // collision hit; check if the entity is closer than the hit entity, or if there is no hit entity, set it as such.
+                if ray.hit {
+                    if let Some((_, distance)) = hit {
+                        if ray.distance < distance {
+                            hit = Some((Picker::Entity(i), ray.distance));
+                        }
+                    } else {
+                        hit = Some((Picker::Entity(i), ray.distance));
+                    }
+                }
+            }
+
+            // collision!
+            if let Some(hit) = hit {
+                if draw.is_key_up(KeyboardKey::KEY_LEFT_SHIFT) {
+                    for e in &mut *brush {
+                        e.focus = false;
+                    }
+
+                    for e in &mut *entity {
+                        e.focus = false;
+                    }
+                }
+
+                match hit.0 {
+                    Picker::Brush(i) => {
+                        let brush = brush.get_mut(i).unwrap();
+                        brush.focus = !brush.focus;
+                    }
+                    Picker::Entity(i) => {
+                        let entity = entity.get_mut(i).unwrap();
+                        entity.focus = !entity.focus;
+                    }
+                }
+            } else {
+                for brush in &mut *brush {
+                    brush.focus = false;
+                }
+
+                for entity in &mut *entity {
+                    entity.focus = false;
+                }
+            }
+        }
+
+        let cross = view.up.cross((view.position - view.target).normalized());
+
+        let x = {
+            if user.move_y_a.get_press(draw) {
+                -1.0
+            } else if user.move_y_b.get_press(draw) {
+                1.0
+            } else {
+                0.0
+            }
+        };
+        let y = {
+            if user.move_x_a.get_press(draw) {
+                1.0
+            } else if user.move_x_b.get_press(draw) {
+                -1.0
+            } else {
+                0.0
+            }
+        };
+
+        let cross = Vector3::new(
+            cross.x * x + view.up.x * y,
+            cross.y * x + view.up.y * y,
+            cross.z * x + view.up.z * y,
+        );
+
+        let zero = cross == Vector3::zero();
+
+        for entity in &mut *entity {
+            if !entity.focus {
+                continue;
+            }
+
+            if zero {
+                return;
+            }
+
+            match widget {
+                Widget::Position => entity.position(cross),
+                Widget::Rotation => entity.rotation(cross),
+                Widget::Scale => entity.scale(cross),
+                _ => {}
+            }
+        }
+
+        for brush in &mut *brush {
+            if !brush.focus {
+                continue;
+            }
+
+            if zero {
+                return;
+            }
+
+            match widget {
+                Widget::Position => brush.position(cross),
+                Widget::Rotation => brush.rotation(cross),
+                Widget::Scale => brush.scale(cross),
+                _ => {}
+            }
+        }
+    }
+
+    #[rustfmt::skip]
+    pub fn update(&mut self, draw: &mut RaylibDrawHandle, thread: &RaylibThread) {
+        if draw.is_window_resized() {
+            self.view = [
+                View::new(draw, thread, Camera3D::perspective(Vector3::new(4.0, 4.0, 4.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 90.0)),
+                View::new(draw, thread, Camera3D::orthographic(Vector3::new(256.0, 0.0, 0.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 15.0)),
+                View::new(draw, thread, Camera3D::orthographic(Vector3::new(0.0, 256.0, 0.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 0.0), 15.0)),
+                View::new(draw, thread, Camera3D::orthographic(Vector3::new(0.0, 0.0, 256.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 15.0)),
+            ];
+        }
+
+        for (i, view) in self.view.iter_mut().enumerate() {
+            let render_view = Rectangle::new(
+                (i as f32 % 2.0).floor() * view.render_texture.width() as f32,
+                (i as f32 / 2.0).floor() * view.render_texture.height() as f32 + Window::TOOL_SHAPE,
+                view.render_texture.width() as f32,
+                view.render_texture.height() as f32,
+            );
+
+            if draw.is_key_pressed(KeyboardKey::KEY_DELETE) {
+                let mut index: Vec<usize> = Vec::new();
+
+                for (j, entity) in self.entity.iter().enumerate() {
+                    if entity.focus {
+                        index.push(j);
+                    }
+                }
+
+                for (k, j) in index.iter().enumerate() {
+                    self.entity.remove(j - k);
+                }
+            }
+
+            if render_view.check_collision_point_rec(draw.get_mouse_position()) {
+                Self::select(
+                    &self.user,
+                    &mut self.brush,
+                    &mut self.entity,
+                    &self.widget,
+                    draw,
+                    render_view,
+                    &mut view.camera,
+                );
+
+                if self.user.look.get_down(draw) {
+                    let cross = view
+                        .camera
+                        .up
+                        .cross((view.camera.position - view.camera.target).normalized());
+
+                    let delta = draw.get_mouse_delta() * 0.05;
+                    let x = cross * delta.x;
+                    let y = view.camera.up * -delta.y;
+
+                    view.camera.position += x + y;
+                    view.camera.target += x + y;
+                }
+            }
+
+            {
+                let mut draw_texture = draw.begin_texture_mode(thread, &mut view.render_texture);
+
+                draw_texture.clear_background(Color::WHITE);
+
+                let mut draw = draw_texture.begin_mode3D(view.camera);
+
+                let angle = {
+                    if view.camera.camera_type() == CameraProjection::CAMERA_PERSPECTIVE {
+                        Vector4::default()
+                    } else {
+                        let cross = view
+                            .camera
+                            .up
+                            .cross(view.camera.position - view.camera.target);
+
+                        let angle = {
+                            if view.camera.up == Vector3::up() {
+                                90.0
+                            } else {
+                                180.0
+                            }
+                        };
+
+                        Vector4::new(cross.x, cross.y, cross.z, angle)
+                    }
+                };
+
+                draw_grid(1000, 1.0, angle);
+
+                let mut x = Ray::default();
+                x.direction = Vector3::new(1.0, 0.0, 0.0);
+                let mut y = Ray::default();
+                y.direction = Vector3::new(0.0, 1.0, 0.0);
+                let mut z = Ray::default();
+                z.direction = Vector3::new(0.0, 0.0, 1.0);
+
+                draw.draw_ray(x, Color::RED);
+                draw.draw_ray(y, Color::GREEN);
+                draw.draw_ray(z, Color::BLUE);
+
+                for brush in &self.brush {
+                    brush.draw(&self.asset);
+
+                    if brush.focus {
+                        match self.widget {
+                            Widget::Vertex => {
+                                for v in brush.vertex {
+                                    draw.draw_cube(
+                                        Vector3::new(v[0], v[1], v[2]),
+                                        0.5,
+                                        0.5,
+                                        0.5,
+                                        Color::RED,
+                                    );
+                                }
+                            }
+                            Widget::Edge => {}
+                            Widget::Face => {}
+                            _ => {}
+                        }
+                    }
+                }
+
+                for entity in &self.entity {
+                    entity.draw(&self.script.lua, &mut draw);
+                }
+            }
+
+            draw.draw_texture_rec(
+                &view.render_texture,
+                Rectangle::new(
+                    0.0,
+                    0.0,
+                    view.render_texture.width() as f32,
+                    -view.render_texture.height() as f32,
+                ),
+                Vector2::new(render_view.x, render_view.y),
+                Color::WHITE,
+            );
         }
     }
 
@@ -60,58 +387,255 @@ impl Editor {
             .outer
             .set_texture_list(handle, thread, &self.script.meta.texture);
     }
+}
 
-    #[rustfmt::skip]
-    pub fn resize(&mut self, handle: &mut RaylibHandle, thread: &RaylibThread) {
-        if handle.is_window_resized() {
-            self.view = [
-                View::new(handle, thread, Camera3D::perspective(Vector3::new(4.0, 4.0, 4.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 90.0)),
-                View::new(handle, thread, Camera3D::perspective(Vector3::new(4.0, 4.0, 4.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 90.0)),
-                View::new(handle, thread, Camera3D::perspective(Vector3::new(4.0, 4.0, 4.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 90.0)),
-                View::new(handle, thread, Camera3D::perspective(Vector3::new(4.0, 4.0, 4.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 90.0)),
-            ];
+//================================================================
+
+pub struct Brush {
+    pub vertex: [[f32; 3]; 8],
+    pub face: [Face; 6],
+    pub focus: bool,
+}
+
+impl Brush {
+    pub const DEFAULT_SHAPE: f32 = 1.0;
+
+    pub fn position(&mut self, value: Vector3) {
+        for v in &mut self.vertex {
+            let vector = Vector3::new(v[0], v[1], v[2]);
+            let vector = vector.transform_with(Matrix::translate(value.x, value.y, value.z));
+            v[0] = vector.x;
+            v[1] = vector.y;
+            v[2] = vector.z;
         }
     }
 
-    pub fn update(&mut self, draw: &mut RaylibDrawHandle, thread: &RaylibThread) {
-        for (i, view) in self.view.iter_mut().enumerate() {
-            {
-                let mut draw_texture = draw.begin_texture_mode(thread, &mut view.render_texture);
+    pub fn rotation(&mut self, value: Vector3) {
+        for v in &mut self.vertex {
+            let vector = Vector3::new(v[0], v[1], v[2]);
+            let vector = vector.transform_with(Matrix::rotate_xyz(value * DEG2RAD as f32 * 10.0));
+            v[0] = vector.x;
+            v[1] = vector.y;
+            v[2] = vector.z;
+        }
+    }
 
-                draw_texture.clear_background(Color::WHITE);
+    pub fn scale(&mut self, value: Vector3) {
+        for v in &mut self.vertex {
+            let vector = Vector3::new(v[0], v[1], v[2]);
+            let vector = vector.transform_with(Matrix::scale(value.x, value.y, value.z));
+            v[0] = vector.x;
+            v[1] = vector.y;
+            v[2] = vector.z;
+        }
+    }
 
-                let mut draw = draw_texture.begin_mode3D(view.camera);
+    pub fn draw(&self, asset: &Asset) {
+        unsafe {
+            // begin quad draw.
+            ffi::rlBegin(ffi::RL_QUADS.try_into().unwrap());
 
-                draw.draw_grid(32, 1.0);
-
-                for brush in &self.brush {
-                    brush.draw(&self.asset.inner.default);
-                }
-
-                for entity in &self.entity {
-                    entity.draw(&mut draw);
-                }
+            if self.focus {
+                ffi::rlColor3f(1.0, 0.0, 0.0);
+            } else {
+                ffi::rlColor3f(1.0, 1.0, 1.0);
             }
 
-            let shift = Vector2::new(
-                (i as f32 % 2.0).floor() * view.render_texture.width() as f32,
-                (i as f32 / 2.0).floor() * view.render_texture.height() as f32 + Window::TOOL_SHAPE,
-            );
+            // for each vertex index, draw the corresponding face.
+            for f in &self.face {
+                // if we have a texture for this face, use it. otherwise, use the default.
+                if let Some(texture) = &f.texture {
+                    let texture = asset.outer.texture.get(texture).unwrap();
+                    ffi::rlSetTexture(texture.id);
+                } else {
+                    ffi::rlSetTexture(asset.inner.default.id);
+                }
 
-            draw.draw_texture_rec(
-                &view.render_texture,
-                Rectangle::new(
-                    0.0,
-                    0.0,
-                    view.render_texture.width() as f32,
-                    -view.render_texture.height() as f32,
-                ),
-                shift,
-                Color::WHITE,
-            );
+                ffi::rlTexCoord2f(
+                    f.scale[0] * (f.shift[0] + 0.0),
+                    f.scale[1] * (f.shift[1] + 1.0),
+                );
+                ffi::rlVertex3f(
+                    self.vertex[f.index[0]][0],
+                    self.vertex[f.index[0]][1],
+                    self.vertex[f.index[0]][2],
+                );
+                ffi::rlTexCoord2f(
+                    f.scale[0] * (f.shift[0] + 1.0),
+                    f.scale[1] * (f.shift[1] + 1.0),
+                );
+                ffi::rlVertex3f(
+                    self.vertex[f.index[1]][0],
+                    self.vertex[f.index[1]][1],
+                    self.vertex[f.index[1]][2],
+                );
+                ffi::rlTexCoord2f(
+                    f.scale[0] * (f.shift[0] + 1.0),
+                    f.scale[1] * (f.shift[1] + 0.0),
+                );
+                ffi::rlVertex3f(
+                    self.vertex[f.index[2]][0],
+                    self.vertex[f.index[2]][1],
+                    self.vertex[f.index[2]][2],
+                );
+                ffi::rlTexCoord2f(
+                    f.scale[0] * (f.shift[0] + 0.0),
+                    f.scale[1] * (f.shift[1] + 0.0),
+                );
+                ffi::rlVertex3f(
+                    self.vertex[f.index[3]][0],
+                    self.vertex[f.index[3]][1],
+                    self.vertex[f.index[3]][2],
+                );
+            }
+
+            // end quad draw.
+            ffi::rlEnd();
+
+            // clear texture.
+            ffi::rlSetTexture(0);
         }
     }
 }
+
+impl Default for Brush {
+    #[rustfmt::skip]
+    fn default() -> Self {
+        Self {
+            vertex: [
+                [-Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE],
+                [ Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE],
+                [ Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE],
+                [-Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE],
+                [-Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE],
+                [ Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE],
+                [ Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE],
+                [-Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE],
+            ],
+            face: Face::new_list(),
+            focus: false,
+        }
+    }
+}
+
+//================================================================
+
+pub struct Face {
+    pub index: [usize; 4],
+    pub shift: [f32; 2],
+    pub scale: [f32; 2],
+    pub texture: Option<String>,
+}
+
+impl Face {
+    pub fn new(index: [usize; 4]) -> Self {
+        Self {
+            index,
+            shift: [0.0, 0.0],
+            scale: [1.0, 1.0],
+            texture: None,
+        }
+    }
+
+    pub fn new_list() -> [Self; 6] {
+        [
+            Face::new([0, 1, 2, 3]),
+            Face::new([5, 4, 7, 6]),
+            Face::new([3, 2, 6, 7]),
+            Face::new([1, 0, 4, 5]),
+            Face::new([1, 5, 6, 2]),
+            Face::new([4, 0, 3, 7]),
+        ]
+    }
+}
+
+//================================================================
+
+pub struct Entity {
+    pub position: [f32; 3],
+    pub rotation: [f32; 3],
+    pub scale: [f32; 3],
+    pub focus: bool,
+    pub lua: EntityLua,
+}
+
+impl Entity {
+    pub fn new_from_lua(lua: EntityLua) -> Self {
+        Self {
+            position: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0],
+            scale: [1.0, 1.0, 1.0],
+            focus: false,
+            lua,
+        }
+    }
+
+    pub fn position(&mut self, value: Vector3) {
+        self.position[0] += value.x;
+        self.position[1] += value.y;
+        self.position[2] += value.z;
+    }
+
+    pub fn rotation(&mut self, value: Vector3) {
+        self.rotation[0] += value.x;
+        self.rotation[1] += value.y;
+        self.rotation[2] += value.z;
+    }
+
+    pub fn scale(&mut self, value: Vector3) {
+        self.scale[0] += value.x;
+        self.scale[1] += value.y;
+        self.scale[2] += value.z;
+    }
+
+    pub fn draw(&self, lua: &Lua, draw: &mut RaylibMode3D<RaylibTextureMode<RaylibDrawHandle>>) {
+        let shape = self.lua.meta.shape;
+        let min = Vector3::new(
+            self.position[0] + shape[0][0],
+            self.position[1] + shape[0][1],
+            self.position[2] + shape[0][2],
+        );
+        let max = Vector3::new(
+            self.position[0] + shape[1][0],
+            self.position[1] + shape[1][1],
+            self.position[2] + shape[1][2],
+        );
+
+        draw.draw_bounding_box(
+            BoundingBox::new(min, max),
+            if self.focus { Color::GREEN } else { Color::RED },
+        );
+
+        let data = lua.to_value(&self.lua.meta.data).unwrap();
+
+        if let Some(call) = &self.lua.call {
+            call.call::<()>((self.position, self.rotation, self.scale, data))
+                .unwrap();
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct EntityLua {
+    pub meta: EntityMeta,
+    pub call: Option<mlua::Function>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct EntityMeta {
+    pub name: String,
+    pub info: String,
+    pub data: HashMap<String, EntityData>,
+    pub shape: [[f32; 3]; 2],
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct EntityData {
+    pub info: String,
+    pub kind: serde_json::Value,
+}
+
+//================================================================
 
 #[derive(Default)]
 pub enum Widget {
@@ -122,6 +646,121 @@ pub enum Widget {
     Vertex = 3,
     Edge = 4,
     Face = 5,
+}
+
+//================================================================
+
+pub struct Asset {
+    pub inner: Inner,
+    pub outer: Outer,
+}
+
+impl Asset {
+    pub fn new(handle: &mut RaylibHandle, thread: &RaylibThread) -> Self {
+        Self {
+            inner: Inner::new(handle, thread),
+            outer: Outer::default(),
+        }
+    }
+}
+
+pub struct Inner {
+    pub default: Texture2D,
+    pub texture: Texture2D,
+    pub entity: Texture2D,
+    pub position: Texture2D,
+    pub rotation: Texture2D,
+    pub scale: Texture2D,
+    pub vertex: Texture2D,
+    pub edge: Texture2D,
+    pub face: Texture2D,
+    pub configuration: Texture2D,
+    pub reload: Texture2D,
+    pub import: Texture2D,
+    pub export: Texture2D,
+    pub exit: Texture2D,
+}
+
+impl Inner {
+    const DEFAULT: &'static [u8] = include_bytes!("asset/default.png");
+    const TEXTURE: &'static [u8] = include_bytes!("asset/texture.png");
+    const ENTITY: &'static [u8] = include_bytes!("asset/entity.png");
+    const POSITION: &'static [u8] = include_bytes!("asset/position.png");
+    const ROTATION: &'static [u8] = include_bytes!("asset/rotation.png");
+    const SCALE: &'static [u8] = include_bytes!("asset/scale.png");
+    const VERTEX: &'static [u8] = include_bytes!("asset/vertex.png");
+    const EDGE: &'static [u8] = include_bytes!("asset/edge.png");
+    const FACE: &'static [u8] = include_bytes!("asset/face.png");
+    const CONFIGURATION: &'static [u8] = include_bytes!("asset/configuration.png");
+    const RELOAD: &'static [u8] = include_bytes!("asset/reload.png");
+    const IMPORT: &'static [u8] = include_bytes!("asset/import.png");
+    const EXPORT: &'static [u8] = include_bytes!("asset/export.png");
+    const EXIT: &'static [u8] = include_bytes!("asset/exit.png");
+
+    pub fn new(handle: &mut RaylibHandle, thread: &RaylibThread) -> Self {
+        Self {
+            default: load_texture(handle, thread, Self::DEFAULT),
+            texture: load_texture(handle, thread, Self::TEXTURE),
+            entity: load_texture(handle, thread, Self::ENTITY),
+            position: load_texture(handle, thread, Self::POSITION),
+            rotation: load_texture(handle, thread, Self::ROTATION),
+            scale: load_texture(handle, thread, Self::SCALE),
+            vertex: load_texture(handle, thread, Self::VERTEX),
+            edge: load_texture(handle, thread, Self::EDGE),
+            face: load_texture(handle, thread, Self::FACE),
+            configuration: load_texture(handle, thread, Self::CONFIGURATION),
+            reload: load_texture(handle, thread, Self::RELOAD),
+            import: load_texture(handle, thread, Self::IMPORT),
+            export: load_texture(handle, thread, Self::EXPORT),
+            exit: load_texture(handle, thread, Self::EXIT),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct Outer {
+    pub texture: HashMap<String, Texture2D>,
+}
+
+impl Outer {
+    pub fn set_texture(&mut self, handle: &mut RaylibHandle, thread: &RaylibThread, path: &str) {
+        let mut texture = handle.load_texture(&thread, path).unwrap();
+
+        texture.gen_texture_mipmaps();
+
+        texture.set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_TRILINEAR);
+
+        self.texture.insert(path.to_string(), texture);
+    }
+
+    pub fn set_texture_list(
+        &mut self,
+        handle: &mut RaylibHandle,
+        thread: &RaylibThread,
+        path: &[String],
+    ) {
+        for p in path {
+            self.set_texture(handle, thread, p);
+        }
+    }
+}
+
+fn load_texture(handle: &mut RaylibHandle, thread: &RaylibThread, data: &[u8]) -> Texture2D {
+    let mut texture = handle
+        .load_texture_from_image(
+            thread,
+            &Image::load_image_from_mem(".png", data)
+                .map_err(|e| panic(&e.to_string()))
+                .unwrap(),
+        )
+        .map_err(|e| panic(&e.to_string()))
+        .unwrap();
+
+    texture.gen_texture_mipmaps();
+
+    texture.set_texture_filter(thread, TextureFilter::TEXTURE_FILTER_TRILINEAR);
+
+    texture
 }
 
 //================================================================
@@ -155,7 +794,10 @@ pub struct User {
     pub move_x_b: Input,
     pub move_y_a: Input,
     pub move_y_b: Input,
+    pub interact: Input,
     pub look: Input,
+    pub texture: Input,
+    pub entity: Input,
     pub position: Input,
     pub rotation: Input,
     pub scale: Input,
@@ -200,13 +842,16 @@ impl Default for User {
             move_x_b:      Input::new(None, Key::Keyboard(KEY_S)),
             move_y_a:      Input::new(None, Key::Keyboard(KEY_A)),
             move_y_b:      Input::new(None, Key::Keyboard(KEY_D)),
+            interact:      Input::new(None, Key::Mouse(MOUSE_BUTTON_LEFT)),
             look:          Input::new(None, Key::Mouse(MOUSE_BUTTON_RIGHT)),
-            position:      Input::new(None, Key::Keyboard(KEY_Q)),
-            rotation:      Input::new(None, Key::Keyboard(KEY_W)),
-            scale:         Input::new(None, Key::Keyboard(KEY_E)),
-            vertex:        Input::new(None, Key::Keyboard(KEY_Z)),
-            edge:          Input::new(None, Key::Keyboard(KEY_X)),
-            face:          Input::new(None, Key::Keyboard(KEY_C)),
+            texture:       Input::new(None, Key::Keyboard(KEY_SEVEN)),
+            entity:        Input::new(None, Key::Keyboard(KEY_EIGHT)),
+            position:      Input::new(None, Key::Keyboard(KEY_ONE)),
+            rotation:      Input::new(None, Key::Keyboard(KEY_TWO)),
+            scale:         Input::new(None, Key::Keyboard(KEY_THREE)),
+            vertex:        Input::new(None, Key::Keyboard(KEY_FOUR)),
+            edge:          Input::new(None, Key::Keyboard(KEY_FIVE)),
+            face:          Input::new(None, Key::Keyboard(KEY_SIX)),
             configuration: Input::new(Some(Key::Keyboard(KEY_LEFT_CONTROL)), Key::Keyboard(KEY_Z)),
             reload:        Input::new(Some(Key::Keyboard(KEY_LEFT_CONTROL)), Key::Keyboard(KEY_X)),
             import:        Input::new(Some(Key::Keyboard(KEY_LEFT_CONTROL)), Key::Keyboard(KEY_C)),
@@ -594,173 +1239,216 @@ impl Serialize for Key {
 
 //================================================================
 
-pub struct Brush {
-    pub vertex: [[f32; 3]; 8],
-    pub face: [Face; 6],
+//================================================================
+
+pub struct Script {
+    pub lua: Lua,
+    pub meta: Meta,
 }
 
-impl Brush {
-    pub const DEFAULT_SHAPE: f32 = 1.0;
+impl Script {
+    pub fn new(game: &Game) -> Self {
+        let lua = Lua::new_with(LuaStdLib::ALL_SAFE, LuaOptions::new()).unwrap();
 
-    pub fn draw(&self, default: &Texture2D) {
-        unsafe {
-            // begin quad draw.
-            ffi::rlBegin(ffi::RL_QUADS.try_into().unwrap());
+        let global = lua.globals();
+        let mallet = lua.create_table().unwrap();
 
-            // for each vertex index, draw the corresponding face.
-            for f in &self.face {
-                // if we have a texture for this face, use it. otherwise, use the default.
-                if let Some(_texture) = &f.texture {
-                } else {
-                    ffi::rlSetTexture(default.id);
-                }
+        Self::system(&lua, &mallet);
 
-                ffi::rlTexCoord2f(
-                    f.scale[0] * (f.shift[0] + 0.0),
-                    f.scale[1] * (f.shift[1] + 1.0),
-                );
-                ffi::rlVertex3f(
-                    self.vertex[f.index[0]][0],
-                    self.vertex[f.index[0]][1],
-                    self.vertex[f.index[0]][2],
-                );
-                ffi::rlTexCoord2f(
-                    f.scale[0] * (f.shift[0] + 1.0),
-                    f.scale[1] * (f.shift[1] + 1.0),
-                );
-                ffi::rlVertex3f(
-                    self.vertex[f.index[1]][0],
-                    self.vertex[f.index[1]][1],
-                    self.vertex[f.index[1]][2],
-                );
-                ffi::rlTexCoord2f(
-                    f.scale[0] * (f.shift[0] + 1.0),
-                    f.scale[1] * (f.shift[1] + 0.0),
-                );
-                ffi::rlVertex3f(
-                    self.vertex[f.index[2]][0],
-                    self.vertex[f.index[2]][1],
-                    self.vertex[f.index[2]][2],
-                );
-                ffi::rlTexCoord2f(
-                    f.scale[0] * (f.shift[0] + 0.0),
-                    f.scale[1] * (f.shift[1] + 0.0),
-                );
-                ffi::rlVertex3f(
-                    self.vertex[f.index[3]][0],
-                    self.vertex[f.index[3]][1],
-                    self.vertex[f.index[3]][2],
-                );
-            }
+        global.set("mallet", mallet).unwrap();
 
-            // end quad draw.
-            ffi::rlEnd();
+        lua.set_app_data(Meta::default());
 
-            // clear texture.
-            ffi::rlSetTexture(0);
-        }
+        let package = global.get::<mlua::Table>("package").unwrap();
+        let path = package.get::<mlua::String>("path").unwrap();
+        package
+            .set("path", format!("{path:?};{}/?.lua", game.path))
+            .unwrap();
+
+        lua.load("require \"main\"").exec().unwrap();
+
+        let meta = lua.remove_app_data::<Meta>().unwrap();
+
+        Self { lua, meta }
     }
-}
 
-impl Default for Brush {
-    #[rustfmt::skip]
-    fn default() -> Self {
-        Self {
-            vertex: [
-                [-Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE],
-                [ Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE],
-                [ Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE],
-                [-Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE],
-                [-Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE],
-                [ Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE],
-                [ Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE],
-                [-Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE],
-            ],
-            face: Face::new_list()
-        }
+    fn system(lua: &Lua, table: &mlua::Table) {
+        table
+            .set("map_entity", lua.create_function(Self::map_entity).unwrap())
+            .unwrap();
+
+        table
+            .set(
+                "map_texture",
+                lua.create_function(Self::map_texture).unwrap(),
+            )
+            .unwrap();
+
+        table
+            .set("model", lua.create_function(Model::new).unwrap())
+            .unwrap();
+    }
+
+    fn map_entity(lua: &Lua, (meta, call): (LuaValue, Option<mlua::Function>)) -> mlua::Result<()> {
+        let mut app = lua.app_data_mut::<Meta>().unwrap();
+
+        let entity = EntityLua {
+            meta: lua.from_value(meta)?,
+            call,
+        };
+
+        app.entity.push(entity);
+        Ok(())
+    }
+
+    fn map_texture(lua: &Lua, path: String) -> mlua::Result<()> {
+        let mut app = lua.app_data_mut::<Meta>().unwrap();
+
+        app.texture.push(path);
+        Ok(())
     }
 }
 
 //================================================================
 
-pub struct Face {
-    pub index: [usize; 4],
-    pub shift: [f32; 2],
-    pub scale: [f32; 2],
-    pub texture: Option<String>,
+#[derive(Default)]
+pub struct Meta {
+    pub entity: Vec<EntityLua>,
+    pub texture: Vec<String>,
 }
 
-impl Face {
-    pub fn new(index: [usize; 4]) -> Self {
-        Self {
-            index,
-            shift: [0.0, 0.0],
-            scale: [1.0, 1.0],
-            texture: None,
+//================================================================
+
+#[derive(Deserialize, Serialize)]
+pub struct Vector2Lua {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Into<ffi::Vector2> for Vector2Lua {
+    fn into(self) -> ffi::Vector2 {
+        ffi::Vector2 {
+            x: self.x,
+            y: self.y,
         }
     }
+}
 
-    pub fn new_list() -> [Self; 6] {
-        [
-            Face::new([0, 1, 2, 3]),
-            Face::new([5, 4, 7, 6]),
-            Face::new([3, 2, 6, 7]),
-            Face::new([1, 0, 4, 5]),
-            Face::new([1, 5, 6, 2]),
-            Face::new([4, 0, 3, 7]),
+impl Vector2Lua {
+    pub fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct Vector3Lua {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+impl Vector3Lua {
+    pub fn new(x: f32, y: f32, z: f32) -> Self {
+        Self { x, y, z }
+    }
+}
+
+impl Into<ffi::Vector3> for Vector3Lua {
+    fn into(self) -> ffi::Vector3 {
+        ffi::Vector3 {
+            x: self.x,
+            y: self.y,
+            z: self.z,
+        }
+    }
+}
+
+/* class
+{ "name": "quiver.model", "info": "The model API." }
+*/
+#[rustfmt::skip]
+pub fn set_global(lua: &Lua, table: &mlua::Table) -> mlua::Result<()> {
+    let model = lua.create_table()?;
+
+    model.set("new", lua.create_function(self::Model::new)?)?;
+
+    table.set("model", model)?;
+
+    Ok(())
+}
+
+type RLModel = ffi::Model;
+
+/* class
+{ "name": "model", "info": "An unique handle for a model in memory." }
+*/
+pub struct Model(pub RLModel);
+
+impl Model {
+    /* entry
+    {
+        "name": "quiver.model.new",
+        "info": "Create a new Model resource.",
+        "member": [
+            { "name": "path", "info": "Path to model file.", "kind": "string" }
+        ],
+        "result": [
+            { "name": "Model", "info": "Model resource.", "kind": "Model" }
         ]
     }
-}
+    */
+    fn new(_: &Lua, path: String) -> mlua::Result<Self> {
+        let name = CString::new(path.clone()).map_err(|e| mlua::Error::runtime(e.to_string()))?;
 
-//================================================================
+        unsafe {
+            let data = ffi::LoadModel(name.as_ptr());
 
-pub struct Entity {
-    pub position: [f32; 3],
-    pub rotation: [f32; 3],
-    pub scale: [f32; 3],
-    pub lua: EntityLua,
-}
-
-impl Entity {
-    pub fn new_from_lua(lua: EntityLua) -> Self {
-        Self {
-            position: [0.0, 0.0, 0.0],
-            rotation: [0.0, 0.0, 0.0],
-            scale: [1.0, 1.0, 1.0],
-            lua,
-        }
-    }
-
-    pub fn draw(&self, draw: &mut RaylibMode3D<RaylibTextureMode<RaylibDrawHandle>>) {
-        let shape = self.lua.meta.shape;
-        let min = Vector3::new(shape[0][0], shape[0][1], shape[0][2]);
-        let max = Vector3::new(shape[1][0], shape[1][1], shape[1][2]);
-
-        draw.draw_bounding_box(BoundingBox::new(min, max), Color::GREEN);
-
-        if let Some(call) = &self.lua.call {
-            call.call::<()>(self.position).unwrap();
+            if ffi::IsModelValid(data) {
+                Ok(Self(data))
+            } else {
+                Err(mlua::Error::RuntimeError(format!(
+                    "Model::new(): Could not load file \"{path}\"."
+                )))
+            }
         }
     }
 }
 
-#[derive(Clone)]
-pub struct EntityLua {
-    pub meta: EntityMeta,
-    pub call: Option<mlua::Function>,
+impl Drop for Model {
+    fn drop(&mut self) {
+        unsafe {
+            ffi::UnloadModel(self.0);
+        }
+    }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
-pub struct EntityMeta {
-    pub name: String,
-    pub info: String,
-    pub data: Vec<EntityData>,
-    pub shape: [[f32; 3]; 2],
-}
+impl mlua::UserData for Model {
+    fn add_fields<F: mlua::UserDataFields<Self>>(_: &mut F) {}
 
-#[derive(Clone, Deserialize, Serialize)]
-pub struct EntityData {
-    pub name: String,
-    pub info: String,
-    pub kind: serde_json::Value,
+    fn add_methods<M: mlua::UserDataMethods<Self>>(method: &mut M) {
+        /* entry
+        { "name": "model:draw", "info": "Draw the model." }
+        */
+        method.add_method_mut(
+            "draw",
+            |_lua, this, (position, rotation, scale): ([f32; 3], [f32; 3], [f32; 3])| unsafe {
+                this.0.transform = (Matrix::rotate_xyz(Vector3::new(
+                    rotation[0] * DEG2RAD as f32,
+                    rotation[1] * DEG2RAD as f32,
+                    rotation[2] * DEG2RAD as f32,
+                )) * Matrix::scale(scale[0], scale[1], scale[2]))
+                .into();
+
+                ffi::DrawModel(
+                    this.0,
+                    Vector3::new(position[0], position[1], position[2]).into(),
+                    1.0,
+                    Color::RED.into(),
+                );
+
+                this.0.transform = Matrix::identity().into();
+                Ok(())
+            },
+        );
+    }
 }
