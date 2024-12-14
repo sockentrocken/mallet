@@ -2,6 +2,43 @@ use raylib::prelude::*;
 
 //================================================================
 
+// convert the size of the screen to a Vector2, for usability's sake.
+pub fn screen_shape(handle: &RaylibHandle) -> Vector2 {
+    Vector2::new(
+        handle.get_screen_width() as f32,
+        handle.get_screen_height() as f32,
+    )
+}
+
+// load a font from memory, throwing a panic window should it fail.
+pub fn load_font(handle: &mut RaylibHandle, thread: &RaylibThread, data: &[u8]) -> Font {
+    handle
+        .load_font_from_memory(thread, ".ttf", data, 24, None)
+        .map_err(|e| panic(&e.to_string()))
+        .unwrap()
+}
+
+// load a texture from memory, throwing a panic window should it fail.
+pub fn load_texture(handle: &mut RaylibHandle, thread: &RaylibThread, data: &[u8]) -> Texture2D {
+    let mut texture = handle
+        .load_texture_from_image(
+            thread,
+            &Image::load_image_from_mem(".png", data)
+                .map_err(|e| panic(&e.to_string()))
+                .unwrap(),
+        )
+        .map_err(|e| panic(&e.to_string()))
+        .unwrap();
+
+    texture.gen_texture_mipmaps();
+
+    texture.set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_TRILINEAR);
+
+    texture
+}
+
+//================================================================
+
 pub fn direction_from_euler(angle: Vector2) -> (Vector3, Vector3, Vector3) {
     let mut d_x = Vector3::default();
     let mut d_y = Vector3::default();

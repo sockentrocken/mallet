@@ -12,41 +12,44 @@ use std::{collections::HashMap, ffi::CString, fmt};
 //================================================================
 
 pub struct Editor {
-    pub brush: Vec<Brush>,
-    pub entity: Vec<Entity>,
-    pub widget: Widget,
     pub asset: Asset,
+    pub world: World,
+    pub widget: Widget,
     pub view: [View; 4],
     pub game: Game,
     pub user: User,
     pub script: Script,
+    pub search_ent: String,
+    pub search_tex: String,
+    pub menu: bool,
 }
-
-pub fn select() {}
 
 impl Editor {
     #[rustfmt::skip]
     pub fn new(handle: &mut RaylibHandle, thread: &RaylibThread, game: Game) -> Self {
         let mut asset = Asset::new(handle, thread);
-        let mut script = Script::new(&game);
+        let script = Script::new(&game)
+            .map_err(|e| panic(&e.to_string()))
+            .unwrap();
 
         asset.outer.set_texture_list(handle, thread, &script.meta.texture);
 
         Self {
-            brush: vec![Brush::default()],
-            //brush: Vec::default(),
-            entity: Vec::default(),
+            world: World::default(),
             widget: Widget::default(),
             asset,
             view: [
                 View::new(handle, thread, Camera3D::perspective(Vector3::new(4.0, 4.0, 4.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 90.0)),
-                View::new(handle, thread, Camera3D::orthographic(Vector3::new(256.0, 0.0, 0.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 15.0)),
-                View::new(handle, thread, Camera3D::orthographic(Vector3::new(0.0, 256.0, 0.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 0.0), 15.0)),
-                View::new(handle, thread, Camera3D::orthographic(Vector3::new(0.0, 0.0, 256.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 15.0)),
+                View::new(handle, thread, Camera3D::orthographic(Vector3::new(512.0, 0.0, 0.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 15.0)),
+                View::new(handle, thread, Camera3D::orthographic(Vector3::new(0.0, 512.0, 0.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 0.0), 15.0)),
+                View::new(handle, thread, Camera3D::orthographic(Vector3::new(0.0, 0.0, 512.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 15.0)),
             ],
             user: User::new(),
             script,
             game,
+            search_ent: String::default(),
+            search_tex: String::default(),
+            menu: bool::default(),
         }
     }
 
@@ -112,18 +115,7 @@ impl Editor {
             // for each entity...
             for (i, entity) in entity.iter().enumerate() {
                 // generate a bound-box.
-                let shape = entity.lua.meta.shape;
-                let min = Vector3::new(
-                    entity.position[0] + shape[0][0],
-                    entity.position[1] + shape[0][1],
-                    entity.position[2] + shape[0][2],
-                );
-                let max = Vector3::new(
-                    entity.position[0] + shape[1][0],
-                    entity.position[1] + shape[1][1],
-                    entity.position[2] + shape[1][2],
-                );
-                let shape = BoundingBox::new(min, max);
+                let shape = entity.bound_box();
 
                 // check for collision.
                 let ray = shape.get_ray_collision_box(ray);
@@ -173,8 +165,6 @@ impl Editor {
             }
         }
 
-        let cross = view.up.cross((view.position - view.target).normalized());
-
         let x = {
             if user.move_y_a.get_press(draw) {
                 -1.0
@@ -194,11 +184,44 @@ impl Editor {
             }
         };
 
-        let cross = Vector3::new(
-            cross.x * x + view.up.x * y,
-            cross.y * x + view.up.y * y,
-            cross.z * x + view.up.z * y,
-        );
+        let cross = {
+            match view.camera_type() {
+                CameraProjection::CAMERA_PERSPECTIVE => {
+                    let cross = view.up.cross((view.position - view.target).normalized());
+
+                    let v_x = Vector3::new(1.0, 0.0, 0.0)
+                        .dot((view.position - view.target).normalized())
+                        .signum();
+                    let v_y = Vector3::new(0.0, 0.0, 1.0).dot(cross).signum();
+
+                    if user.look.get_down(draw) {
+                        Vector3::zero()
+                    } else {
+                        Vector3::new(
+                            (Vector3::new(1.0, 0.0, 0.0).x * -y * v_x)
+                                + (Vector3::new(0.0, 0.0, 1.0).x * x * v_y),
+                            (Vector3::new(1.0, 0.0, 0.0).y * -y * v_x)
+                                + (Vector3::new(0.0, 0.0, 1.0).y * x * v_y),
+                            (Vector3::new(1.0, 0.0, 0.0).z * -y * v_x)
+                                + (Vector3::new(0.0, 0.0, 1.0).z * x * v_y),
+                        )
+                    }
+                }
+                CameraProjection::CAMERA_ORTHOGRAPHIC => {
+                    let cross = view.up.cross((view.position - view.target).normalized());
+
+                    if user.look.get_down(draw) {
+                        Vector3::zero()
+                    } else {
+                        Vector3::new(
+                            cross.x * x + view.up.x * y,
+                            cross.y * x + view.up.y * y,
+                            cross.z * x + view.up.z * y,
+                        )
+                    }
+                }
+            }
+        };
 
         let zero = cross == Vector3::zero();
 
@@ -238,13 +261,13 @@ impl Editor {
     }
 
     #[rustfmt::skip]
-    pub fn update(&mut self, draw: &mut RaylibDrawHandle, thread: &RaylibThread) {
+    pub fn update(&mut self, draw: &mut RaylibDrawHandle, thread: &RaylibThread, asset: &Asset) {
         if draw.is_window_resized() {
             self.view = [
                 View::new(draw, thread, Camera3D::perspective(Vector3::new(4.0, 4.0, 4.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 90.0)),
-                View::new(draw, thread, Camera3D::orthographic(Vector3::new(256.0, 0.0, 0.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 15.0)),
-                View::new(draw, thread, Camera3D::orthographic(Vector3::new(0.0, 256.0, 0.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 0.0), 15.0)),
-                View::new(draw, thread, Camera3D::orthographic(Vector3::new(0.0, 0.0, 256.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 15.0)),
+                View::new(draw, thread, Camera3D::orthographic(Vector3::new(512.0, 0.0, 0.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 15.0)),
+                View::new(draw, thread, Camera3D::orthographic(Vector3::new(0.0, 512.0, 0.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 0.0), 15.0)),
+                View::new(draw, thread, Camera3D::orthographic(Vector3::new(0.0, 0.0, 512.0), Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0), 15.0)),
             ];
         }
 
@@ -259,44 +282,64 @@ impl Editor {
             if draw.is_key_pressed(KeyboardKey::KEY_DELETE) {
                 let mut index: Vec<usize> = Vec::new();
 
-                for (j, entity) in self.entity.iter().enumerate() {
+                for (j, entity) in self.world.entity.iter().enumerate() {
                     if entity.focus {
                         index.push(j);
                     }
                 }
 
                 for (k, j) in index.iter().enumerate() {
-                    self.entity.remove(j - k);
+                    self.world.entity.remove(j - k);
                 }
+            }
+
+            if view.mouse {
+                match view.camera.camera_type() {
+                    CameraProjection::CAMERA_PERSPECTIVE => {
+                        draw.update_camera(&mut view.camera, CameraMode::CAMERA_FIRST_PERSON);
+                    },
+                    CameraProjection::CAMERA_ORTHOGRAPHIC => {
+                        let cross = view
+                            .camera
+                            .up
+                            .cross((view.camera.position - view.camera.target).normalized());
+
+                        let delta = draw.get_mouse_delta() * 0.05;
+                        let x = cross * delta.x;
+                        let y = view.camera.up * -delta.y;
+
+                        view.camera.position += x + y;
+                        view.camera.target   += x + y;
+                    },
+                }
+            }
+
+            if self.user.look.get_release(draw) && view.mouse {
+                view.mouse = false;
             }
 
             if render_view.check_collision_point_rec(draw.get_mouse_position()) {
                 Self::select(
                     &self.user,
-                    &mut self.brush,
-                    &mut self.entity,
+                    &mut self.world.brush,
+                    &mut self.world.entity,
                     &self.widget,
                     draw,
                     render_view,
                     &mut view.camera,
                 );
 
-                if self.user.look.get_down(draw) {
-                    let cross = view
-                        .camera
-                        .up
-                        .cross((view.camera.position - view.camera.target).normalized());
-
-                    let delta = draw.get_mouse_delta() * 0.05;
-                    let x = cross * delta.x;
-                    let y = view.camera.up * -delta.y;
-
-                    view.camera.position += x + y;
-                    view.camera.target += x + y;
-                }
+                if self.user.look.get_press(draw) {
+                    view.mouse = true;
+                };
             }
 
             {
+                let port = Vector2::new(
+                    view.render_texture.width() as f32,
+                    view.render_texture.height() as f32,
+                );
+
                 let mut draw_texture = draw.begin_texture_mode(thread, &mut view.render_texture);
 
                 draw_texture.clear_background(Color::WHITE);
@@ -337,7 +380,7 @@ impl Editor {
                 draw.draw_ray(y, Color::GREEN);
                 draw.draw_ray(z, Color::BLUE);
 
-                for brush in &self.brush {
+                for brush in &self.world.brush {
                     brush.draw(&self.asset);
 
                     if brush.focus {
@@ -360,8 +403,21 @@ impl Editor {
                     }
                 }
 
-                for entity in &self.entity {
-                    entity.draw(&self.script.lua, &mut draw);
+                for entity in &self.world.entity {
+                    entity.draw_3d(&self.script.lua, &mut draw);
+                }
+
+                drop(draw);
+
+                let mut draw = draw_texture.begin_mode2D(Camera2D {
+                    offset: Vector2::default(),
+                    target: Vector2::default(),
+                    rotation: 0.0,
+                    zoom: 1.0,
+                });
+
+                for entity in &self.world.entity {
+                    entity.draw_2d(&mut draw, asset, &view.camera, port);
                 }
             }
 
@@ -380,9 +436,10 @@ impl Editor {
     }
 
     pub fn reload(&mut self, handle: &mut RaylibHandle, thread: &RaylibThread) {
-        self.entity.clear();
         self.asset.outer.texture.clear();
-        self.script = Script::new(&self.game);
+        self.script = Script::new(&self.game)
+            .map_err(|e| panic(&e.to_string()))
+            .unwrap();
         self.asset
             .outer
             .set_texture_list(handle, thread, &self.script.meta.texture);
@@ -391,6 +448,15 @@ impl Editor {
 
 //================================================================
 
+#[derive(Default, Deserialize, Serialize)]
+pub struct World {
+    pub brush: Vec<Brush>,
+    pub entity: Vec<Entity>,
+}
+
+//================================================================
+
+#[derive(Deserialize, Serialize)]
 pub struct Brush {
     pub vertex: [[f32; 3]; 8],
     pub face: [Face; 6],
@@ -445,8 +511,13 @@ impl Brush {
             for f in &self.face {
                 // if we have a texture for this face, use it. otherwise, use the default.
                 if let Some(texture) = &f.texture {
-                    let texture = asset.outer.texture.get(texture).unwrap();
-                    ffi::rlSetTexture(texture.id);
+                    if let Some(texture) = asset.outer.texture.get(texture) {
+                        // texture does exist, use it.
+                        ffi::rlSetTexture(texture.id);
+                    } else {
+                        // we are pointing to a texture that does not exist...use the default texture.
+                        ffi::rlSetTexture(asset.inner.default.id);
+                    }
                 } else {
                     ffi::rlSetTexture(asset.inner.default.id);
                 }
@@ -520,6 +591,7 @@ impl Default for Brush {
 
 //================================================================
 
+#[derive(Deserialize, Serialize)]
 pub struct Face {
     pub index: [usize; 4],
     pub shift: [f32; 2],
@@ -551,74 +623,105 @@ impl Face {
 
 //================================================================
 
+#[derive(Deserialize, Serialize)]
 pub struct Entity {
-    pub position: [f32; 3],
-    pub rotation: [f32; 3],
-    pub scale: [f32; 3],
+    pub position: Vector3,
+    pub rotation: Vector3,
+    pub scale: Vector3,
     pub focus: bool,
-    pub lua: EntityLua,
+    pub meta: EntityMeta,
 }
 
 impl Entity {
-    pub fn new_from_lua(lua: EntityLua) -> Self {
+    pub fn new_from_lua(meta: EntityMeta) -> Self {
         Self {
-            position: [0.0, 0.0, 0.0],
-            rotation: [0.0, 0.0, 0.0],
-            scale: [1.0, 1.0, 1.0],
+            position: Vector3::default(),
+            rotation: Vector3::default(),
+            scale: Vector3::one(),
             focus: false,
-            lua,
+            meta,
         }
     }
 
     pub fn position(&mut self, value: Vector3) {
-        self.position[0] += value.x;
-        self.position[1] += value.y;
-        self.position[2] += value.z;
+        self.position += value;
     }
 
     pub fn rotation(&mut self, value: Vector3) {
-        self.rotation[0] += value.x;
-        self.rotation[1] += value.y;
-        self.rotation[2] += value.z;
+        self.rotation += value;
     }
 
     pub fn scale(&mut self, value: Vector3) {
-        self.scale[0] += value.x;
-        self.scale[1] += value.y;
-        self.scale[2] += value.z;
+        self.scale += value;
     }
 
-    pub fn draw(&self, lua: &Lua, draw: &mut RaylibMode3D<RaylibTextureMode<RaylibDrawHandle>>) {
-        let shape = self.lua.meta.shape;
-        let min = Vector3::new(
-            self.position[0] + shape[0][0],
-            self.position[1] + shape[0][1],
-            self.position[2] + shape[0][2],
-        );
-        let max = Vector3::new(
-            self.position[0] + shape[1][0],
-            self.position[1] + shape[1][1],
-            self.position[2] + shape[1][2],
-        );
+    pub fn bound_box(&self) -> BoundingBox {
+        BoundingBox::new(
+            self.meta.shape.min + self.position,
+            self.meta.shape.max + self.position,
+        )
+    }
 
+    pub fn draw_3d(&self, lua: &Lua, draw: &mut RaylibMode3D<RaylibTextureMode<RaylibDrawHandle>>) {
         draw.draw_bounding_box(
-            BoundingBox::new(min, max),
+            self.bound_box(),
             if self.focus { Color::GREEN } else { Color::RED },
         );
 
-        let data = lua.to_value(&self.lua.meta.data).unwrap();
+        let data = lua
+            .to_value(&self)
+            .map_err(|e| panic(&e.to_string()))
+            .unwrap();
 
-        if let Some(call) = &self.lua.call {
-            call.call::<()>((self.position, self.rotation, self.scale, data))
+        if let Some(call) = &self.meta.call {
+            let g = lua.globals();
+            let g = g
+                .get::<mlua::Function>(&**call)
+                .map_err(|e| panic(&e.to_string()))
+                .unwrap();
+
+            g.call::<()>(data)
+                .map_err(|e| panic(&e.to_string()))
                 .unwrap();
         }
     }
-}
 
-#[derive(Clone)]
-pub struct EntityLua {
-    pub meta: EntityMeta,
-    pub call: Option<mlua::Function>,
+    pub fn draw_2d(
+        &self,
+        draw: &mut RaylibMode2D<RaylibTextureMode<RaylibDrawHandle>>,
+        asset: &Asset,
+        view: &Camera3D,
+        port: Vector2,
+    ) {
+        let text = draw.get_world_to_screen_ex(
+            self.position + Vector3::new(0.0, self.meta.shape.max.y + 1.0, 0.0),
+            view,
+            port.x as i32,
+            port.y as i32,
+        );
+        let font = asset.inner.font.measure_text(&self.meta.name, 24.0, 1.0);
+
+        draw.draw_rectangle_rounded(
+            Rectangle::new(
+                text.x - font.x * 0.5,
+                text.y - font.y * 0.5,
+                font.x + 8.0,
+                font.y,
+            ),
+            0.25,
+            4,
+            Color::new(0, 0, 0, if self.focus { 255 } else { 127 }),
+        );
+
+        draw.draw_text_ex(
+            &asset.inner.font,
+            &self.meta.name,
+            Vector2::new((text.x - font.x * 0.5) + 4.0, (text.y - font.y * 0.5)),
+            24.0,
+            1.0,
+            Color::WHITE,
+        );
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -626,7 +729,8 @@ pub struct EntityMeta {
     pub name: String,
     pub info: String,
     pub data: HashMap<String, EntityData>,
-    pub shape: [[f32; 3]; 2],
+    pub shape: BoundingBox,
+    pub call: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -640,12 +744,12 @@ pub struct EntityData {
 #[derive(Default)]
 pub enum Widget {
     #[default]
-    Position = 0,
-    Rotation = 1,
-    Scale = 2,
-    Vertex = 3,
-    Edge = 4,
-    Face = 5,
+    Position,
+    Rotation,
+    Scale,
+    Vertex,
+    Edge,
+    Face,
 }
 
 //================================================================
@@ -665,7 +769,11 @@ impl Asset {
 }
 
 pub struct Inner {
+    pub font: Font,
+    pub logo: Texture2D,
     pub default: Texture2D,
+    pub drop_a: Texture2D,
+    pub drop_b: Texture2D,
     pub texture: Texture2D,
     pub entity: Texture2D,
     pub position: Texture2D,
@@ -674,45 +782,55 @@ pub struct Inner {
     pub vertex: Texture2D,
     pub edge: Texture2D,
     pub face: Texture2D,
-    pub configuration: Texture2D,
+    pub user: Texture2D,
     pub reload: Texture2D,
     pub import: Texture2D,
     pub export: Texture2D,
     pub exit: Texture2D,
 }
 
+#[rustfmt::skip]
 impl Inner {
-    const DEFAULT: &'static [u8] = include_bytes!("asset/default.png");
-    const TEXTURE: &'static [u8] = include_bytes!("asset/texture.png");
-    const ENTITY: &'static [u8] = include_bytes!("asset/entity.png");
+    pub const ICON: &'static [u8] = include_bytes!("asset/icon.png");
+    const FONT:     &'static [u8] = include_bytes!("asset/font.ttf");
+    const LOGO:     &'static [u8] = include_bytes!("asset/logo.png");
+    const DEFAULT:  &'static [u8] = include_bytes!("asset/default.png");
+    const DROP_A:   &'static [u8] = include_bytes!("asset/drop-a.png");
+    const DROP_B:   &'static [u8] = include_bytes!("asset/drop-b.png");
+    const TEXTURE:  &'static [u8] = include_bytes!("asset/texture.png");
+    const ENTITY:   &'static [u8] = include_bytes!("asset/entity.png");
     const POSITION: &'static [u8] = include_bytes!("asset/position.png");
     const ROTATION: &'static [u8] = include_bytes!("asset/rotation.png");
-    const SCALE: &'static [u8] = include_bytes!("asset/scale.png");
-    const VERTEX: &'static [u8] = include_bytes!("asset/vertex.png");
-    const EDGE: &'static [u8] = include_bytes!("asset/edge.png");
-    const FACE: &'static [u8] = include_bytes!("asset/face.png");
-    const CONFIGURATION: &'static [u8] = include_bytes!("asset/configuration.png");
-    const RELOAD: &'static [u8] = include_bytes!("asset/reload.png");
-    const IMPORT: &'static [u8] = include_bytes!("asset/import.png");
-    const EXPORT: &'static [u8] = include_bytes!("asset/export.png");
-    const EXIT: &'static [u8] = include_bytes!("asset/exit.png");
+    const SCALE:    &'static [u8] = include_bytes!("asset/scale.png");
+    const VERTEX:   &'static [u8] = include_bytes!("asset/vertex.png");
+    const EDGE:     &'static [u8] = include_bytes!("asset/edge.png");
+    const FACE:     &'static [u8] = include_bytes!("asset/face.png");
+    const USER:     &'static [u8] = include_bytes!("asset/user.png");
+    const RELOAD:   &'static [u8] = include_bytes!("asset/reload.png");
+    const IMPORT:   &'static [u8] = include_bytes!("asset/import.png");
+    const EXPORT:   &'static [u8] = include_bytes!("asset/export.png");
+    const EXIT:     &'static [u8] = include_bytes!("asset/exit.png");
 
     pub fn new(handle: &mut RaylibHandle, thread: &RaylibThread) -> Self {
         Self {
-            default: load_texture(handle, thread, Self::DEFAULT),
-            texture: load_texture(handle, thread, Self::TEXTURE),
-            entity: load_texture(handle, thread, Self::ENTITY),
+            font:     load_font(handle, thread, Self::FONT),
+            logo:     load_texture(handle, thread, Self::LOGO),
+            default:  load_texture(handle, thread, Self::DEFAULT),
+            drop_a:   load_texture(handle, thread, Self::DROP_A),
+            drop_b:   load_texture(handle, thread, Self::DROP_B),
+            texture:  load_texture(handle, thread, Self::TEXTURE),
+            entity:   load_texture(handle, thread, Self::ENTITY),
             position: load_texture(handle, thread, Self::POSITION),
             rotation: load_texture(handle, thread, Self::ROTATION),
-            scale: load_texture(handle, thread, Self::SCALE),
-            vertex: load_texture(handle, thread, Self::VERTEX),
-            edge: load_texture(handle, thread, Self::EDGE),
-            face: load_texture(handle, thread, Self::FACE),
-            configuration: load_texture(handle, thread, Self::CONFIGURATION),
-            reload: load_texture(handle, thread, Self::RELOAD),
-            import: load_texture(handle, thread, Self::IMPORT),
-            export: load_texture(handle, thread, Self::EXPORT),
-            exit: load_texture(handle, thread, Self::EXIT),
+            scale:    load_texture(handle, thread, Self::SCALE),
+            vertex:   load_texture(handle, thread, Self::VERTEX),
+            edge:     load_texture(handle, thread, Self::EDGE),
+            face:     load_texture(handle, thread, Self::FACE),
+            user:     load_texture(handle, thread, Self::USER),
+            reload:   load_texture(handle, thread, Self::RELOAD),
+            import:   load_texture(handle, thread, Self::IMPORT),
+            export:   load_texture(handle, thread, Self::EXPORT),
+            exit:     load_texture(handle, thread, Self::EXIT),
         }
     }
 }
@@ -723,16 +841,17 @@ pub struct Outer {
 }
 
 impl Outer {
+    // load a texture from disk into the hash-map.
     pub fn set_texture(&mut self, handle: &mut RaylibHandle, thread: &RaylibThread, path: &str) {
-        let mut texture = handle.load_texture(&thread, path).unwrap();
-
-        texture.gen_texture_mipmaps();
-
-        texture.set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_TRILINEAR);
+        let texture = handle
+            .load_texture(thread, path)
+            .map_err(|e| panic(&e.to_string()))
+            .unwrap();
 
         self.texture.insert(path.to_string(), texture);
     }
 
+    // load a texture from disk into the hash-map, using a path list instead.
     pub fn set_texture_list(
         &mut self,
         handle: &mut RaylibHandle,
@@ -745,48 +864,45 @@ impl Outer {
     }
 }
 
-fn load_texture(handle: &mut RaylibHandle, thread: &RaylibThread, data: &[u8]) -> Texture2D {
-    let mut texture = handle
-        .load_texture_from_image(
-            thread,
-            &Image::load_image_from_mem(".png", data)
-                .map_err(|e| panic(&e.to_string()))
-                .unwrap(),
-        )
-        .map_err(|e| panic(&e.to_string()))
-        .unwrap();
-
-    texture.gen_texture_mipmaps();
-
-    texture.set_texture_filter(thread, TextureFilter::TEXTURE_FILTER_TRILINEAR);
-
-    texture
-}
-
 //================================================================
 
+// a representation of a 3D view-port.
 pub struct View {
     pub render_texture: RenderTexture2D,
     pub camera: Camera3D,
+    pub mouse: bool,
 }
 
 impl View {
+    // create a new view-port.
     pub fn new(handle: &mut RaylibHandle, thread: &RaylibThread, camera: Camera3D) -> Self {
+        // convert screen X/Y to a f32 vector.
+        let shape = Vector2::new(
+            handle.get_screen_width() as f32 * 0.5,
+            handle.get_screen_height() as f32 * 0.5,
+        );
+
+        // load render texture.
+        let render_texture = handle
+            .load_render_texture(
+                &thread,
+                (shape.x - Window::EDIT_SHAPE / 2.0) as u32,
+                (shape.y - Window::TOOL_SHAPE / 2.0) as u32,
+            )
+            .map_err(|e| panic(&e.to_string()))
+            .unwrap();
+
         Self {
-            render_texture: handle
-                .load_render_texture(
-                    &thread,
-                    ((handle.get_screen_width() - Window::EDIT_SHAPE as i32) as f32 / 2.0) as u32,
-                    ((handle.get_screen_height() - Window::TOOL_SHAPE as i32) as f32 / 2.0) as u32,
-                )
-                .unwrap(),
+            render_texture,
             camera,
+            mouse: false,
         }
     }
 }
 
 //================================================================
 
+// a representation of user configuration data.
 #[derive(Deserialize, Serialize)]
 pub struct User {
     pub mouse_speed: [f32; 2],
@@ -804,7 +920,7 @@ pub struct User {
     pub vertex: Input,
     pub edge: Input,
     pub face: Input,
-    pub configuration: Input,
+    pub user: Input,
     pub reload: Input,
     pub import: Input,
     pub export: Input,
@@ -814,6 +930,7 @@ pub struct User {
 impl User {
     pub const FILE_NAME: &'static str = "user.json";
 
+    // create a new user, using existing user data from disk, or the default data.
     pub fn new() -> Self {
         // check if file does exist, otherwise, return default.
         if std::path::Path::new(Self::FILE_NAME).is_file() {
@@ -833,36 +950,37 @@ impl User {
     }
 }
 
+#[rustfmt::skip]
 impl Default for User {
-    #[rustfmt::skip]
     fn default() -> Self {
         Self {
             mouse_speed: [1.0, 1.0],
-            move_x_a:      Input::new(None, Key::Keyboard(KEY_W)),
-            move_x_b:      Input::new(None, Key::Keyboard(KEY_S)),
-            move_y_a:      Input::new(None, Key::Keyboard(KEY_A)),
-            move_y_b:      Input::new(None, Key::Keyboard(KEY_D)),
-            interact:      Input::new(None, Key::Mouse(MOUSE_BUTTON_LEFT)),
-            look:          Input::new(None, Key::Mouse(MOUSE_BUTTON_RIGHT)),
-            texture:       Input::new(None, Key::Keyboard(KEY_SEVEN)),
-            entity:        Input::new(None, Key::Keyboard(KEY_EIGHT)),
-            position:      Input::new(None, Key::Keyboard(KEY_ONE)),
-            rotation:      Input::new(None, Key::Keyboard(KEY_TWO)),
-            scale:         Input::new(None, Key::Keyboard(KEY_THREE)),
-            vertex:        Input::new(None, Key::Keyboard(KEY_FOUR)),
-            edge:          Input::new(None, Key::Keyboard(KEY_FIVE)),
-            face:          Input::new(None, Key::Keyboard(KEY_SIX)),
-            configuration: Input::new(Some(Key::Keyboard(KEY_LEFT_CONTROL)), Key::Keyboard(KEY_Z)),
-            reload:        Input::new(Some(Key::Keyboard(KEY_LEFT_CONTROL)), Key::Keyboard(KEY_X)),
-            import:        Input::new(Some(Key::Keyboard(KEY_LEFT_CONTROL)), Key::Keyboard(KEY_C)),
-            export:        Input::new(Some(Key::Keyboard(KEY_LEFT_CONTROL)), Key::Keyboard(KEY_V)),
-            exit:          Input::new(Some(Key::Keyboard(KEY_LEFT_CONTROL)), Key::Keyboard(KEY_B)),
+            move_x_a: Input::new(None, Key::Keyboard(KEY_W)),
+            move_x_b: Input::new(None, Key::Keyboard(KEY_S)),
+            move_y_a: Input::new(None, Key::Keyboard(KEY_A)),
+            move_y_b: Input::new(None, Key::Keyboard(KEY_D)),
+            interact: Input::new(None, Key::Mouse(MOUSE_BUTTON_LEFT)),
+            look:     Input::new(None, Key::Mouse(MOUSE_BUTTON_RIGHT)),
+            texture:  Input::new(None, Key::Keyboard(KEY_SEVEN)),
+            entity:   Input::new(None, Key::Keyboard(KEY_EIGHT)),
+            position: Input::new(None, Key::Keyboard(KEY_ONE)),
+            rotation: Input::new(None, Key::Keyboard(KEY_TWO)),
+            scale:    Input::new(None, Key::Keyboard(KEY_THREE)),
+            vertex:   Input::new(None, Key::Keyboard(KEY_FOUR)),
+            edge:     Input::new(None, Key::Keyboard(KEY_FIVE)),
+            face:     Input::new(None, Key::Keyboard(KEY_SIX)),
+            user:     Input::new(Some(Key::Keyboard(KEY_LEFT_CONTROL)), Key::Keyboard(KEY_Z)),
+            reload:   Input::new(Some(Key::Keyboard(KEY_LEFT_CONTROL)), Key::Keyboard(KEY_X)),
+            import:   Input::new(Some(Key::Keyboard(KEY_LEFT_CONTROL)), Key::Keyboard(KEY_C)),
+            export:   Input::new(Some(Key::Keyboard(KEY_LEFT_CONTROL)), Key::Keyboard(KEY_V)),
+            exit:     Input::new(Some(Key::Keyboard(KEY_LEFT_CONTROL)), Key::Keyboard(KEY_B)),
         }
     }
 }
 
 //================================================================
 
+// an abstraction of input, wherein "key" can be a keyboard button or a mouse button.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Input {
     pub modify: Option<Key>,
@@ -1164,6 +1282,7 @@ impl Input {
 
 //================================================================
 
+// button abstraction.
 #[derive(Clone)]
 pub enum Key {
     Keyboard(KeyboardKey),
@@ -1239,72 +1358,76 @@ impl Serialize for Key {
 
 //================================================================
 
-//================================================================
-
 pub struct Script {
     pub lua: Lua,
     pub meta: Meta,
 }
 
 impl Script {
-    pub fn new(game: &Game) -> Self {
-        let lua = Lua::new_with(LuaStdLib::ALL_SAFE, LuaOptions::new()).unwrap();
+    const FILE_NAME: &'static str = "main";
 
+    pub fn new(game: &Game) -> mlua::Result<Self> {
+        // initialize lua, get the global table, and create the mallet table.
+        let lua = Lua::new_with(LuaStdLib::ALL_SAFE, LuaOptions::new())?;
         let global = lua.globals();
-        let mallet = lua.create_table().unwrap();
+        let mallet = lua.create_table()?;
 
-        Self::system(&lua, &mallet);
+        // add every built-in function to the mallet table.
+        Self::system(&lua, &mallet)?;
 
-        global.set("mallet", mallet).unwrap();
+        // set the mallet table at the global level.
+        global.set("mallet", mallet)?;
 
+        // set the Meta app data for the script to push to.
         lua.set_app_data(Meta::default());
 
-        let package = global.get::<mlua::Table>("package").unwrap();
-        let path = package.get::<mlua::String>("path").unwrap();
-        package
-            .set("path", format!("{path:?};{}/?.lua", game.path))
-            .unwrap();
+        // get the package loader table, and append the game path to the end, so lua can also search the game directory for it.
+        let package = global.get::<mlua::Table>("package")?;
+        package.set(
+            "path",
+            format!(
+                "{:?};{}/?.lua",
+                package.get::<mlua::String>("path")?,
+                game.path
+            ),
+        )?;
 
-        lua.load("require \"main\"").exec().unwrap();
+        // load the main.lua script.
+        lua.load(format!("require \"{}\"", Self::FILE_NAME))
+            .exec()?;
 
+        // get the Meta app data, to retrieve every all Lua data such as the map entity list.
         let meta = lua.remove_app_data::<Meta>().unwrap();
 
-        Self { lua, meta }
+        Ok(Self { lua, meta })
     }
 
-    fn system(lua: &Lua, table: &mlua::Table) {
-        table
-            .set("map_entity", lua.create_function(Self::map_entity).unwrap())
-            .unwrap();
+    // push every built-in function to the lua space.
+    fn system(lua: &Lua, table: &mlua::Table) -> mlua::Result<()> {
+        table.set("map_entity", lua.create_function(Self::map_entity)?)?;
+        table.set("map_texture", lua.create_function(Self::map_texture)?)?;
+        set_global(lua, table)?;
 
-        table
-            .set(
-                "map_texture",
-                lua.create_function(Self::map_texture).unwrap(),
-            )
-            .unwrap();
-
-        table
-            .set("model", lua.create_function(Model::new).unwrap())
-            .unwrap();
-    }
-
-    fn map_entity(lua: &Lua, (meta, call): (LuaValue, Option<mlua::Function>)) -> mlua::Result<()> {
-        let mut app = lua.app_data_mut::<Meta>().unwrap();
-
-        let entity = EntityLua {
-            meta: lua.from_value(meta)?,
-            call,
-        };
-
-        app.entity.push(entity);
         Ok(())
     }
 
-    fn map_texture(lua: &Lua, path: String) -> mlua::Result<()> {
-        let mut app = lua.app_data_mut::<Meta>().unwrap();
+    // load a map entity.
+    fn map_entity(lua: &Lua, entity: LuaValue) -> mlua::Result<()> {
+        if let Some(mut app) = lua.app_data_mut::<Meta>() {
+            // push!
+            app.entity.push(lua.from_value(entity)?);
+        }
 
-        app.texture.push(path);
+        Ok(())
+    }
+
+    // load a map texture.
+    fn map_texture(lua: &Lua, path: String) -> mlua::Result<()> {
+        if let Some(mut app) = lua.app_data_mut::<Meta>() {
+            // push!
+            app.texture.push(path);
+        }
+
         Ok(())
     }
 }
@@ -1313,55 +1436,11 @@ impl Script {
 
 #[derive(Default)]
 pub struct Meta {
-    pub entity: Vec<EntityLua>,
+    pub entity: Vec<EntityMeta>,
     pub texture: Vec<String>,
 }
 
 //================================================================
-
-#[derive(Deserialize, Serialize)]
-pub struct Vector2Lua {
-    pub x: f32,
-    pub y: f32,
-}
-
-impl Into<ffi::Vector2> for Vector2Lua {
-    fn into(self) -> ffi::Vector2 {
-        ffi::Vector2 {
-            x: self.x,
-            y: self.y,
-        }
-    }
-}
-
-impl Vector2Lua {
-    pub fn new(x: f32, y: f32) -> Self {
-        Self { x, y }
-    }
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct Vector3Lua {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-}
-
-impl Vector3Lua {
-    pub fn new(x: f32, y: f32, z: f32) -> Self {
-        Self { x, y, z }
-    }
-}
-
-impl Into<ffi::Vector3> for Vector3Lua {
-    fn into(self) -> ffi::Vector3 {
-        ffi::Vector3 {
-            x: self.x,
-            y: self.y,
-            z: self.z,
-        }
-    }
-}
 
 /* class
 { "name": "quiver.model", "info": "The model API." }
@@ -1431,17 +1510,21 @@ impl mlua::UserData for Model {
         */
         method.add_method_mut(
             "draw",
-            |_lua, this, (position, rotation, scale): ([f32; 3], [f32; 3], [f32; 3])| unsafe {
+            |lua, this, (position, rotation, scale): (LuaValue, LuaValue, LuaValue)| unsafe {
+                let position: Vector3 = lua.from_value(position)?;
+                let rotation: Vector3 = lua.from_value(rotation)?;
+                let scale: Vector3 = lua.from_value(scale)?;
+
                 this.0.transform = (Matrix::rotate_xyz(Vector3::new(
-                    rotation[0] * DEG2RAD as f32,
-                    rotation[1] * DEG2RAD as f32,
-                    rotation[2] * DEG2RAD as f32,
-                )) * Matrix::scale(scale[0], scale[1], scale[2]))
+                    rotation.x * DEG2RAD as f32,
+                    rotation.y * DEG2RAD as f32,
+                    rotation.z * DEG2RAD as f32,
+                )) * Matrix::scale(scale.x, scale.y, scale.z))
                 .into();
 
                 ffi::DrawModel(
                     this.0,
-                    Vector3::new(position[0], position[1], position[2]).into(),
+                    Vector3::new(position.x, position.y, position.z).into(),
                     1.0,
                     Color::RED.into(),
                 );
