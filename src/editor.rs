@@ -7,7 +7,11 @@ use crate::window::*;
 use mlua::prelude::*;
 use raylib::{ffi::KeyboardKey::*, ffi::MouseButton::*, prelude::*};
 use serde::{de, de::Visitor, Deserialize, Serialize};
-use std::{collections::HashMap, ffi::CString, fmt};
+use std::{
+    collections::{BTreeMap, HashMap},
+    ffi::CString,
+    fmt,
+};
 
 //================================================================
 
@@ -55,8 +59,7 @@ impl Editor {
 
     pub fn select(
         user: &User,
-        brush: &mut [Brush],
-        entity: &mut [Entity],
+        world: &mut World,
         widget: &Widget,
         draw: &mut RaylibDrawHandle,
         render_view: Rectangle,
@@ -74,46 +77,66 @@ impl Editor {
             enum Picker {
                 Brush(usize),
                 Entity(usize),
+                Vertex(usize, usize),
             }
 
             let mut hit: Option<(Picker, f32)> = None;
 
             // for each brush...
-            for (i, brush) in brush.iter().enumerate() {
-                for face in &brush.face {
-                    // generate quad.
-                    let point = [
-                        brush.vertex[face.index[0]],
-                        brush.vertex[face.index[1]],
-                        brush.vertex[face.index[2]],
-                        brush.vertex[face.index[3]],
-                    ];
+            for (i, brush) in world.brush.iter().enumerate() {
+                if brush.focus {
+                    // based on which widget is selected, do per vertex/per edge/per face picking.
+                    for (j, vertex) in brush.vertex.iter().enumerate() {
+                        // generate a bound-box.
+                        let shape = BoundingBox::new(
+                            -(Vector3::one() * 0.5) + vertex.point,
+                            (Vector3::one() * 0.5) + vertex.point,
+                        );
 
-                    let point = [
-                        Vector3::new(point[0][0], point[0][1], point[0][2]),
-                        Vector3::new(point[1][0], point[1][1], point[1][2]),
-                        Vector3::new(point[2][0], point[2][1], point[2][2]),
-                        Vector3::new(point[3][0], point[3][1], point[3][2]),
-                    ];
+                        // check for collision.
+                        let ray = shape.get_ray_collision_box(ray);
 
-                    // check for collision.
-                    let ray = get_ray_collision_quad(ray, point[0], point[1], point[2], point[3]);
+                        // collision hit; check if the entity is closer than the hit entity, or if there is no hit entity, set it as such.
+                        if ray.hit {
+                            if let Some((_, distance)) = hit {
+                                if ray.distance < distance {
+                                    hit = Some((Picker::Vertex(i, j), ray.distance));
+                                }
+                            } else {
+                                hit = Some((Picker::Vertex(i, j), ray.distance));
+                            }
+                        }
+                    }
+                } else {
+                    for face in &brush.face {
+                        // generate quad.
+                        let point = [
+                            brush.vertex[face.index[0]].point,
+                            brush.vertex[face.index[1]].point,
+                            brush.vertex[face.index[2]].point,
+                            brush.vertex[face.index[3]].point,
+                        ];
 
-                    // collision hit; check if the entity is closer than the hit entity, or if there is no hit entity, set it as such.
-                    if ray.hit {
-                        if let Some((_, distance)) = hit {
-                            if ray.distance < distance {
+                        // check for collision.
+                        let ray =
+                            get_ray_collision_quad(ray, point[0], point[1], point[2], point[3]);
+
+                        // collision hit; check if the entity is closer than the hit entity, or if there is no hit entity, set it as such.
+                        if ray.hit {
+                            if let Some((_, distance)) = hit {
+                                if ray.distance < distance {
+                                    hit = Some((Picker::Brush(i), ray.distance));
+                                }
+                            } else {
                                 hit = Some((Picker::Brush(i), ray.distance));
                             }
-                        } else {
-                            hit = Some((Picker::Brush(i), ray.distance));
                         }
                     }
                 }
             }
 
             // for each entity...
-            for (i, entity) in entity.iter().enumerate() {
+            for (i, entity) in world.entity.iter().enumerate() {
                 // generate a bound-box.
                 let shape = entity.bound_box();
 
@@ -134,34 +157,30 @@ impl Editor {
 
             // collision!
             if let Some(hit) = hit {
-                if draw.is_key_up(KeyboardKey::KEY_LEFT_SHIFT) {
-                    for e in &mut *brush {
-                        e.focus = false;
-                    }
-
-                    for e in &mut *entity {
-                        e.focus = false;
-                    }
+                if !draw.is_key_down(KeyboardKey::KEY_LEFT_SHIFT) {
+                    world.select_all(false);
                 }
 
                 match hit.0 {
                     Picker::Brush(i) => {
-                        let brush = brush.get_mut(i).unwrap();
+                        world.select_all(false);
+                        let brush = world.brush.get_mut(i).unwrap();
                         brush.focus = !brush.focus;
                     }
                     Picker::Entity(i) => {
-                        let entity = entity.get_mut(i).unwrap();
+                        world.select_all(false);
+
+                        let entity = world.entity.get_mut(i).unwrap();
                         entity.focus = !entity.focus;
+                    }
+                    Picker::Vertex(i, j) => {
+                        let brush = world.brush.get_mut(i).unwrap();
+                        brush.focus = true;
+                        brush.vertex[j].focus = !brush.vertex[j].focus;
                     }
                 }
             } else {
-                for brush in &mut *brush {
-                    brush.focus = false;
-                }
-
-                for entity in &mut *entity {
-                    entity.focus = false;
-                }
+                world.select_all(false);
             }
         }
 
@@ -198,12 +217,12 @@ impl Editor {
                         Vector3::zero()
                     } else {
                         Vector3::new(
-                            (Vector3::new(1.0, 0.0, 0.0).x * -y * v_x)
-                                + (Vector3::new(0.0, 0.0, 1.0).x * x * v_y),
-                            (Vector3::new(1.0, 0.0, 0.0).y * -y * v_x)
-                                + (Vector3::new(0.0, 0.0, 1.0).y * x * v_y),
-                            (Vector3::new(1.0, 0.0, 0.0).z * -y * v_x)
-                                + (Vector3::new(0.0, 0.0, 1.0).z * x * v_y),
+                            (Vector3::new(1.0, 0.0, 0.0).x * x * v_x)
+                                + (Vector3::new(0.0, 0.0, 1.0).x * y * v_y),
+                            (Vector3::new(1.0, 0.0, 0.0).y * x * v_x)
+                                + (Vector3::new(0.0, 0.0, 1.0).y * y * v_y),
+                            (Vector3::new(1.0, 0.0, 0.0).z * x * v_x)
+                                + (Vector3::new(0.0, 0.0, 1.0).z * y * v_y),
                         )
                     }
                 }
@@ -225,7 +244,7 @@ impl Editor {
 
         let zero = cross == Vector3::zero();
 
-        for entity in &mut *entity {
+        for entity in &mut world.entity {
             if !entity.focus {
                 continue;
             }
@@ -242,13 +261,21 @@ impl Editor {
             }
         }
 
-        for brush in &mut *brush {
+        for brush in &mut world.brush {
             if !brush.focus {
                 continue;
             }
 
             if zero {
                 return;
+            }
+
+            for vertex in &mut brush.vertex {
+                if !vertex.focus {
+                    continue;
+                }
+
+                vertex.point += cross;
             }
 
             match widget {
@@ -321,8 +348,7 @@ impl Editor {
             if render_view.check_collision_point_rec(draw.get_mouse_position()) {
                 Self::select(
                     &self.user,
-                    &mut self.world.brush,
-                    &mut self.world.entity,
+                    &mut self.world,
                     &self.widget,
                     draw,
                     render_view,
@@ -386,13 +412,18 @@ impl Editor {
                     if brush.focus {
                         match self.widget {
                             Widget::Vertex => {
-                                for v in brush.vertex {
+                                for v in &brush.vertex {
                                     draw.draw_cube(
-                                        Vector3::new(v[0], v[1], v[2]),
+                                        v.point,
                                         0.5,
                                         0.5,
                                         0.5,
-                                        Color::RED,
+                                        if v.focus {
+                                            Color::GREEN
+                                        } else {
+                                            Color::RED
+                                        }
+                                        ,
                                     );
                                 }
                             }
@@ -448,17 +479,46 @@ impl Editor {
 
 //================================================================
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct World {
     pub brush: Vec<Brush>,
     pub entity: Vec<Entity>,
+}
+
+impl World {
+    pub fn select_all(&mut self, value: bool) {
+        for brush in &mut self.brush {
+            brush.focus = value;
+
+            for vertex in &mut brush.vertex {
+                vertex.focus = value;
+            }
+
+            for face in &mut brush.face {
+                face.focus = value;
+            }
+        }
+
+        for entity in &mut self.entity {
+            entity.focus = value;
+        }
+    }
+}
+
+impl Default for World {
+    fn default() -> Self {
+        Self {
+            brush: vec![Brush::default()],
+            entity: vec![],
+        }
+    }
 }
 
 //================================================================
 
 #[derive(Deserialize, Serialize)]
 pub struct Brush {
-    pub vertex: [[f32; 3]; 8],
+    pub vertex: [Vertex; 8],
     pub face: [Face; 6],
     pub focus: bool,
 }
@@ -468,31 +528,25 @@ impl Brush {
 
     pub fn position(&mut self, value: Vector3) {
         for v in &mut self.vertex {
-            let vector = Vector3::new(v[0], v[1], v[2]);
-            let vector = vector.transform_with(Matrix::translate(value.x, value.y, value.z));
-            v[0] = vector.x;
-            v[1] = vector.y;
-            v[2] = vector.z;
+            v.point = v
+                .point
+                .transform_with(Matrix::translate(value.x, value.y, value.z));
         }
     }
 
     pub fn rotation(&mut self, value: Vector3) {
         for v in &mut self.vertex {
-            let vector = Vector3::new(v[0], v[1], v[2]);
-            let vector = vector.transform_with(Matrix::rotate_xyz(value * DEG2RAD as f32 * 10.0));
-            v[0] = vector.x;
-            v[1] = vector.y;
-            v[2] = vector.z;
+            v.point = v
+                .point
+                .transform_with(Matrix::rotate_xyz(value * DEG2RAD as f32 * 10.0));
         }
     }
 
     pub fn scale(&mut self, value: Vector3) {
         for v in &mut self.vertex {
-            let vector = Vector3::new(v[0], v[1], v[2]);
-            let vector = vector.transform_with(Matrix::scale(value.x, value.y, value.z));
-            v[0] = vector.x;
-            v[1] = vector.y;
-            v[2] = vector.z;
+            v.point = v
+                .point
+                .transform_with(Matrix::scale(value.x, value.y, value.z));
         }
     }
 
@@ -502,9 +556,9 @@ impl Brush {
             ffi::rlBegin(ffi::RL_QUADS.try_into().unwrap());
 
             if self.focus {
-                ffi::rlColor3f(1.0, 0.0, 0.0);
+                ffi::rlColor3f(1.00, 0.75, 0.75);
             } else {
-                ffi::rlColor3f(1.0, 1.0, 1.0);
+                ffi::rlColor3f(1.00, 1.00, 1.00);
             }
 
             // for each vertex index, draw the corresponding face.
@@ -522,41 +576,29 @@ impl Brush {
                     ffi::rlSetTexture(asset.inner.default.id);
                 }
 
-                ffi::rlTexCoord2f(
-                    f.scale[0] * (f.shift[0] + 0.0),
-                    f.scale[1] * (f.shift[1] + 1.0),
-                );
+                ffi::rlTexCoord2f(f.scale.x * (f.shift.x + 0.0), f.scale.y * (f.shift.y + 1.0));
                 ffi::rlVertex3f(
-                    self.vertex[f.index[0]][0],
-                    self.vertex[f.index[0]][1],
-                    self.vertex[f.index[0]][2],
+                    self.vertex[f.index[0]].point.x,
+                    self.vertex[f.index[0]].point.y,
+                    self.vertex[f.index[0]].point.z,
                 );
-                ffi::rlTexCoord2f(
-                    f.scale[0] * (f.shift[0] + 1.0),
-                    f.scale[1] * (f.shift[1] + 1.0),
-                );
+                ffi::rlTexCoord2f(f.scale.x * (f.shift.x + 1.0), f.scale.y * (f.shift.y + 1.0));
                 ffi::rlVertex3f(
-                    self.vertex[f.index[1]][0],
-                    self.vertex[f.index[1]][1],
-                    self.vertex[f.index[1]][2],
+                    self.vertex[f.index[1]].point.x,
+                    self.vertex[f.index[1]].point.y,
+                    self.vertex[f.index[1]].point.z,
                 );
-                ffi::rlTexCoord2f(
-                    f.scale[0] * (f.shift[0] + 1.0),
-                    f.scale[1] * (f.shift[1] + 0.0),
-                );
+                ffi::rlTexCoord2f(f.scale.x * (f.shift.x + 1.0), f.scale.y * (f.shift.y + 0.0));
                 ffi::rlVertex3f(
-                    self.vertex[f.index[2]][0],
-                    self.vertex[f.index[2]][1],
-                    self.vertex[f.index[2]][2],
+                    self.vertex[f.index[2]].point.x,
+                    self.vertex[f.index[2]].point.y,
+                    self.vertex[f.index[2]].point.z,
                 );
-                ffi::rlTexCoord2f(
-                    f.scale[0] * (f.shift[0] + 0.0),
-                    f.scale[1] * (f.shift[1] + 0.0),
-                );
+                ffi::rlTexCoord2f(f.scale.x * (f.shift.x + 0.0), f.scale.y * (f.shift.y + 0.0));
                 ffi::rlVertex3f(
-                    self.vertex[f.index[3]][0],
-                    self.vertex[f.index[3]][1],
-                    self.vertex[f.index[3]][2],
+                    self.vertex[f.index[3]].point.x,
+                    self.vertex[f.index[3]].point.y,
+                    self.vertex[f.index[3]].point.z,
                 );
             }
 
@@ -574,14 +616,14 @@ impl Default for Brush {
     fn default() -> Self {
         Self {
             vertex: [
-                [-Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE],
-                [ Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE],
-                [ Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE],
-                [-Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE],
-                [-Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE],
-                [ Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE],
-                [ Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE],
-                [-Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE],
+                Vertex::new(-Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE),
+                Vertex::new( Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE),
+                Vertex::new( Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE),
+                Vertex::new(-Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE),
+                Vertex::new(-Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE),
+                Vertex::new( Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE),
+                Vertex::new( Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE),
+                Vertex::new(-Self::DEFAULT_SHAPE,  Self::DEFAULT_SHAPE, -Self::DEFAULT_SHAPE),
             ],
             face: Face::new_list(),
             focus: false,
@@ -592,19 +634,40 @@ impl Default for Brush {
 //================================================================
 
 #[derive(Deserialize, Serialize)]
+pub struct Vertex {
+    pub focus: bool,
+    pub point: Vector3,
+}
+
+impl Vertex {
+    pub fn new(x: f32, y: f32, z: f32) -> Self {
+        Self {
+            focus: false,
+            point: Vector3::new(x, y, z),
+        }
+    }
+}
+
+//================================================================
+
+#[derive(Deserialize, Serialize)]
 pub struct Face {
+    pub focus: bool,
     pub index: [usize; 4],
-    pub shift: [f32; 2],
-    pub scale: [f32; 2],
+    pub shift: Vector2,
+    pub scale: Vector2,
+    pub color: Color,
     pub texture: Option<String>,
 }
 
 impl Face {
     pub fn new(index: [usize; 4]) -> Self {
         Self {
+            focus: false,
             index,
-            shift: [0.0, 0.0],
-            scale: [1.0, 1.0],
+            shift: Vector2::new(0.0, 0.0),
+            scale: Vector2::new(1.0, 1.0),
+            color: Color::WHITE,
             texture: None,
         }
     }
@@ -716,7 +779,7 @@ impl Entity {
         draw.draw_text_ex(
             &asset.inner.font,
             &self.meta.name,
-            Vector2::new((text.x - font.x * 0.5) + 4.0, (text.y - font.y * 0.5)),
+            Vector2::new((text.x - font.x * 0.5) + 4.0, text.y - font.y * 0.5),
             24.0,
             1.0,
             Color::WHITE,
@@ -837,7 +900,7 @@ impl Inner {
 
 #[derive(Default)]
 pub struct Outer {
-    pub texture: HashMap<String, Texture2D>,
+    pub texture: BTreeMap<String, Texture2D>,
 }
 
 impl Outer {

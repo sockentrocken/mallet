@@ -79,7 +79,7 @@ impl Window {
     //================================================================
 
     pub const TOOL_SHAPE: f32 = 56.0;
-    pub const EDIT_SHAPE: f32 = 320.0;
+    pub const EDIT_SHAPE: f32 = 400.0;
 
     //================================================================
 
@@ -379,7 +379,7 @@ impl Window {
             }
         }
 
-        self.record(draw, asset, "Search Entity", &mut editor.search_ent);
+        self.record(draw, asset, "Search Ent.", &mut editor.search_ent);
 
         self.scroll(asset, draw, "##Entity Scroll", Rectangle::new(self.point.x, self.point.y, Self::EDIT_SHAPE - 24.0, draw_shape.y - self.point.y - 16.0), |window, draw, scroll| {
             for entity in &editor.script.meta.entity {
@@ -511,34 +511,44 @@ impl Window {
 
         self.point(p);
         self.separator(draw, Vector2::new(Self::EDIT_SHAPE - 24.0, 2.0));
+        self.record(draw, asset, "Search Tex.", &mut editor.search_tex);
 
         let mut tool: Option<(Vector2, String)> = None;
 
         self.scroll(asset, draw, "##Texture", Rectangle::new(self.point.x, self.point.y, Self::EDIT_SHAPE - 24.0, draw_shape.y - self.point.y - 16.0), |window, draw, scroll| {
-            for (i, (name, texture)) in editor.asset.outer.texture.iter().enumerate() {
-                let x = (i as f32 % 4.0).floor();
-                let y = (i as f32 / 4.0).floor();
+            let mut j = 0;
+
+            for (name, texture) in &editor.asset.outer.texture {
+                let name = name.replace(&editor.game.path, "");
+
+                if !name.starts_with(&editor.search_tex) {
+                    continue;
+                }
+
+                let s = (Self::EDIT_SHAPE / 72.0).floor();
+                let x = (j as f32 % s).floor();
+                let y = (j as f32 / s).floor();
                 let p = scroll + Vector2::new(x * 72.0, y * 72.0);
 
                 window.point(p);
                 let state =
-                    window.button_image(draw, asset, name, Vector2::new(64.0, 64.0), texture, true);
+                    window.button_image(draw, asset, &name, Vector2::new(64.0, 64.0), texture, true);
 
                 if state.0.hover {
-                    let name = name.replace(&editor.game.path, "");
-
-                    tool = Some((p + Vector2::new(0.0, 64.0 + state.1.get_point()), name));
+                    tool = Some((p + Vector2::new(0.0, 64.0 + state.1.get_point()), name.clone()));
                 }
 
                 if state.0.click {
                     for brush in &mut editor.world.brush {
                         if brush.focus {
                             for f in &mut brush.face {
-                                f.texture = Some(name.to_string());
+                                f.texture = Some(name.clone());
                             }
                         }
                     }
                 }
+
+                j += 1;
             }
         });
 
@@ -1171,7 +1181,7 @@ impl Window {
         self.card_sharp(
             draw,
             data.get_shape(&rectangle_max),
-            data.get_color(&Window::COLOR_PRIMARY_MAIN),
+            data.get_color(&Window::COLOR_PRIMARY_SIDE),
             true,
         );
         self.font(
@@ -1179,14 +1189,14 @@ impl Window {
             asset,
             value,
             text_max_point,
-            data.get_color(&Self::COLOR_TEXT_SIDE),
+            data.get_color(&Self::COLOR_TEXT),
         );
         self.font(
             draw,
             asset,
             text,
             text_min_point,
-            data.get_color(&Self::COLOR_TEXT_MAIN),
+            data.get_color(&Self::COLOR_TEXT),
         );
 
         unsafe {
@@ -1235,7 +1245,6 @@ impl Window {
         }
 
         let difference = (data.scroll_shape - shape.height).max(0.0);
-        println!("{difference}");
 
         let scroll = Vector2::new(shape.x, shape.y - difference * data.scroll_shift);
 
@@ -1246,7 +1255,7 @@ impl Window {
 
         call(self, draw, scroll);
 
-        draw.draw_rectangle_rec(shape, Color::new(255, 0, 0, 127));
+        //draw.draw_rectangle_rec(shape, Color::new(255, 0, 0, 127));
 
         self.shape = None;
 
