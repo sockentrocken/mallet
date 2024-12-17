@@ -21,11 +21,10 @@ pub struct Window {
 }
 
 impl Window {
-    pub const COLOR_PRIMARY_MAIN: Color = Color::new(3, 169, 244, 255);
-    pub const COLOR_PRIMARY_SIDE: Color = Color::new(25, 118, 210, 255);
-    pub const COLOR_TEXT: Color = Color::new(255, 255, 255, 255);
-    pub const COLOR_TEXT_MAIN: Color = Color::new(33, 33, 33, 255);
-    pub const COLOR_TEXT_SIDE: Color = Color::new(117, 117, 117, 255);
+    const COLOR_PRIMARY_MAIN: Color = Color::new(3, 169, 244, 255);
+    const COLOR_PRIMARY_SIDE: Color = Color::new(68, 138, 255, 255);
+    const COLOR_TEXT_WHITE: Color = Color::new(255, 255, 255, 255);
+    const COLOR_TEXT_BLACK: Color = Color::new(33, 33, 33, 255);
 
     //================================================================
 
@@ -144,7 +143,7 @@ impl Window {
                     asset,
                     "Game Selection",
                     Vector2::new(16.0, 12.0),
-                    Window::COLOR_TEXT,
+                    Window::COLOR_TEXT_WHITE,
                 );
 
                 self.point(Vector2::new(20.0, 72.0));
@@ -335,7 +334,7 @@ impl Window {
         for entity in &mut editor.world.entity {
             if entity.focus {
                 self.scroll(asset, draw, "##Entity Data",  Rectangle::new(self.point.x, self.point.y, Self::EDIT_SHAPE - 24.0, (draw_shape.y * 0.5) - self.point.y - 32.0), |window, draw, scroll| {
-                    window.text(draw, asset, &entity.meta.info, Self::COLOR_TEXT);
+                    window.text(draw, asset, &entity.meta.info, Self::COLOR_TEXT_WHITE);
 
                     window.drop(&editor.asset, draw, "Position", |window, draw| {
                         window.record_number(draw, asset, "X", &mut entity.position.x);
@@ -864,7 +863,7 @@ impl Window {
                         rectangle.x + shape.x + Self::BUTTON_TEXT_SHIFT.x,
                         rectangle.y - data.get_point(),
                     ),
-                    data.get_color(&Self::COLOR_TEXT),
+                    data.get_color(&Self::COLOR_TEXT_WHITE),
                 );
             } else {
                 self.font(
@@ -872,7 +871,7 @@ impl Window {
                     asset,
                     text,
                     text_point,
-                    data.get_color(&Self::COLOR_TEXT),
+                    data.get_color(&Self::COLOR_TEXT_WHITE),
                 );
             }
         }
@@ -939,7 +938,7 @@ impl Window {
             asset,
             text,
             text_point,
-            data.get_color(&Self::COLOR_TEXT_MAIN),
+            data.get_color(&Self::COLOR_TEXT_WHITE),
         );
 
         self.point.y += Self::TOGGLE_SHAPE.y + Self::TOGGLE_SHIFT;
@@ -1031,7 +1030,7 @@ impl Window {
 
             let measure = self.font_measure(asset, value);
 
-            self.font(draw, asset, value, pin - measure * 0.5, Self::COLOR_TEXT_MAIN);
+            self.font(draw, asset, value, pin - measure * 0.5, Self::COLOR_TEXT_WHITE);
         }
 
         let pin = Vector2::new(
@@ -1045,7 +1044,7 @@ impl Window {
             data.get_color(&Self::COLOR_PRIMARY_MAIN),
         );
 
-        self.font(draw, asset, text, text_point, Self::COLOR_TEXT_MAIN);
+        self.font(draw, asset, text, text_point, Self::COLOR_TEXT_WHITE);
 
         self.point.y += Self::SLIDER_SHAPE_MAX.y + Self::SLIDER_SHIFT;
         self.count += 1;
@@ -1097,14 +1096,14 @@ impl Window {
             asset,
             &format!("{value}"),
             text_max_point,
-            data.get_color(&Self::COLOR_TEXT_SIDE),
+            data.get_color(&Self::COLOR_TEXT_WHITE),
         );
         self.font(
             draw,
             asset,
             text,
             text_min_point,
-            data.get_color(&Self::COLOR_TEXT_MAIN),
+            data.get_color(&Self::COLOR_TEXT_WHITE),
         );
 
         unsafe {
@@ -1189,14 +1188,14 @@ impl Window {
             asset,
             value,
             text_max_point,
-            data.get_color(&Self::COLOR_TEXT),
+            data.get_color(&Self::COLOR_TEXT_WHITE),
         );
         self.font(
             draw,
             asset,
             text,
             text_min_point,
-            data.get_color(&Self::COLOR_TEXT),
+            data.get_color(&Self::COLOR_TEXT_WHITE),
         );
 
         unsafe {

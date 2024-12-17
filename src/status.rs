@@ -9,26 +9,6 @@ use raylib::prelude::*;
 
 //================================================================
 
-#[derive(Default)]
-pub enum InitialState {
-    #[default]
-    // main state (new map, load map, exit mallet).
-    Main,
-    // new state (game selection).
-    New,
-    // load state (map selection).
-    //Load,
-}
-
-#[derive(Default)]
-pub enum SuccessState {
-    #[default]
-    // main state (main editor window).
-    Main,
-    // user state (user configuration).
-    User,
-}
-
 pub enum Status {
     Initial(InitialState, Asset, Window, Vec<Game>),
     Success(SuccessState, Asset, Window, Editor),
@@ -37,7 +17,8 @@ pub enum Status {
 }
 
 impl Status {
-    // create a new state, beginning in the initial state.
+    // get a new status instance.
+    #[rustfmt::skip]
     pub fn new(handle: &mut RaylibHandle, thread: &RaylibThread) -> Self {
         Self::Initial(
             InitialState::default(),
@@ -58,7 +39,7 @@ impl Status {
             .title("Mallet")
             .build();
 
-        // load mallet icon.
+        // load default Mallet icon.
         let icon = Image::load_image_from_mem(".png", Inner::ICON)
             .map_err(|e| panic(&e.to_string()))
             .unwrap();
@@ -121,4 +102,23 @@ impl Status {
     ) -> Option<Status> {
         None
     }
+}
+
+//================================================================
+
+#[derive(Default)]
+pub enum InitialState {
+    #[default]
+    Main,
+    New,
+    //Load,
+}
+
+//================================================================
+
+#[derive(Default)]
+pub enum SuccessState {
+    #[default]
+    Main,
+    User,
 }

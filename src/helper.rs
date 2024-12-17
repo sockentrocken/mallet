@@ -114,4 +114,5 @@ pub fn panic(text: &str) {
         .set_description(text)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
+    panic!("{}", text);
 }
